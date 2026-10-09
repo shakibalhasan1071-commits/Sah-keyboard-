@@ -1249,6 +1249,20 @@ fun MoeKeyboardView(
                                 }
                             )
                         }
+                    } else if (isAiPanelOpen) {
+                        DraggablePanelContainer(
+                            height = aiPanelHeight,
+                            onHeightChange = { aiPanelHeight = it },
+                            onClose = { isAiPanelOpen = false },
+                            isDarkTheme = theme.isDark
+                        ) {
+                            InKeyboardAiAssistant(
+                                isDarkTheme = theme.isDark,
+                                height = aiPanelHeight - 28.dp,
+                                onInsertText = { handleKeyInput(it) },
+                                onClose = { isAiPanelOpen = false }
+                            )
+                        }
                     }
 
                     if (isPasswordPopoverOpen) {

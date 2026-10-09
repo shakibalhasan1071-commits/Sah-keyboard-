@@ -141,12 +141,16 @@ fun InKeyboardBrowser(
         if (isAddressBarFocused) {
             navigate()
         } else {
-            val script = "if (document.activeElement) { " +
-                    "   var el = document.activeElement; " +
-                    "   var event = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }); " +
-                    "   el.dispatchEvent(event); " +
-                    "   if (el.form) el.form.submit(); " +
-                    "}"
+            val script = "(function() { " +
+                    "   var sendBtn = document.querySelector('button.btn-send, button.tgico-send, button[title*=\"Send\"], button.send, .btn-circle.btn-primary'); " +
+                    "   if (sendBtn && sendBtn.offsetParent !== null) { sendBtn.click(); return; } " +
+                    "   if (document.activeElement) { " +
+                    "       var el = document.activeElement; " +
+                    "       var event = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }); " +
+                    "       el.dispatchEvent(event); " +
+                    "       if (el.form) el.form.submit(); " +
+                    "   } " +
+                    "})();"
             webView?.evaluateJavascript(script, null)
         }
     }

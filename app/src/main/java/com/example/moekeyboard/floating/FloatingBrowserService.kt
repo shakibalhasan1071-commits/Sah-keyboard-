@@ -12,11 +12,15 @@ import android.os.Build
 import android.os.IBinder
 import android.provider.Settings
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
+import android.widget.EditText
+import com.example.moekeyboard.ui.MiniBrowserActivity
 import android.webkit.CookieManager
 import android.webkit.SslErrorHandler
 import android.webkit.WebChromeClient
@@ -66,11 +70,19 @@ class FloatingBrowserService : Service() {
     private var savedX = 0
     private var savedY = 0
 
-    private var currentLoadedUrl: String = TELEGRAM_K_URL
-    private var isUsingVersionK = true
+    private var currentLoadedUrl: String = TELEGRAM_A_URL
+    private var isUsingVersionK = false
     private var versionBadgeText: TextView? = null
-    private var isWindowFocusedForInput = false
+    private var isWindowFocusedForInput = true
     private var focusBadgeText: TextView? = null
+    private var addressBarInput: EditText? = null
+
+    private var isMaximized = false
+    private var preMaximizeWidth = 0
+    private var preMaximizeHeight = 0
+    private var preMaximizeX = 0
+    private var preMaximizeY = 0
+    private var maxBtnView: ImageView? = null
 
     companion object {
         const val ACTION_START = "ACTION_START_FLOATING_BROWSER"
@@ -79,7 +91,7 @@ class FloatingBrowserService : Service() {
         const val ACTION_OPEN_OR_SHOW = "ACTION_OPEN_OR_SHOW"
         const val EXTRA_URL = "EXTRA_URL"
 
-        const val DEFAULT_TELEGRAM_URL = "https://web.telegram.org/k/"
+        const val DEFAULT_TELEGRAM_URL = "https://web.telegram.org/a/"
         const val TELEGRAM_K_URL = "https://web.telegram.org/k/"
         const val TELEGRAM_A_URL = "https://web.telegram.org/a/"
 
@@ -179,30 +191,26 @@ class FloatingBrowserService : Service() {
             WindowManager.LayoutParams.TYPE_PHONE
         }
 
-        // Refined compact default window size (smaller and very comfortable for small floating chat window)
-        val initialWidth = (screenWidth * 0.76f).toInt().coerceIn(dp(280), dp(420))
-        val initialHeight = (screenHeight * 0.48f).toInt().coerceIn(dp(340), dp(580))
+        // Generous, comfortable window size so chats and messages are fully visible
+        val initialWidth = (screenWidth * 0.90f).toInt().coerceIn(dp(320), dp(500))
+        val initialHeight = (screenHeight * 0.62f).toInt().coerceIn(dp(400), dp(720))
 
         savedWidth = initialWidth
         savedHeight = initialHeight
 
         // WindowManager flags optimized for floating chat window:
-        // FLAG_NOT_FOCUSABLE allows the soft keyboard to remain active on the primary keyboard input
-        // while user types or taps inside WebView, without stealing full window focus away.
-        // FLAG_NOT_TOUCH_MODAL ensures outside touches pass through to other apps.
+        // By default focusable for seamless typing, FLAG_NOT_TOUCH_MODAL allows outside touches to pass through
         params = WindowManager.LayoutParams(
             initialWidth,
             initialHeight,
             layoutType,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                    WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                     WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
             x = (screenWidth - initialWidth) / 2
-            y = dp(60)
+            y = dp(45)
             softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
         }
 
@@ -297,21 +305,17 @@ class FloatingBrowserService : Service() {
     }
 
     /**
-     * Root layout that intercepts outside touches to release focus to background apps immediately
+     * Root layout for floating window
      */
     private inner class FloatingRootLayout(context: Context) : FrameLayout(context) {
         override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
-            if (ev.action == MotionEvent.ACTION_OUTSIDE) {
-                releaseFocusToBackground()
-            }
+            // Note: Do NOT revoke focus on ACTION_OUTSIDE.
+            // Touching the soft keyboard keys fires ACTION_OUTSIDE because the IME is outside this window.
+            // Revoking focus drops the keyboard connection and breaks message typing and sending.
             return super.dispatchTouchEvent(ev)
         }
 
         override fun onTouchEvent(event: MotionEvent): Boolean {
-            if (event.action == MotionEvent.ACTION_OUTSIDE) {
-                releaseFocusToBackground()
-                return true
-            }
             return super.onTouchEvent(event)
         }
     }
@@ -384,6 +388,19 @@ class FloatingBrowserService : Service() {
             }
         }
         leftControls.addView(minBtn)
+
+        // Left control: Maximize / Fullscreen toggle button ([ ])
+        val maxBtn = ImageView(this).apply {
+            setImageResource(android.R.drawable.ic_menu_always_landscape_portrait)
+            setColorFilter(0xFFB0B7C3.toInt())
+            setPadding(dp(6), dp(6), dp(6), dp(6))
+            layoutParams = LinearLayout.LayoutParams(dp(28), dp(28))
+            setOnClickListener {
+                toggleMaximize()
+            }
+        }
+        maxBtnView = maxBtn
+        leftControls.addView(maxBtn)
 
         // Telegram Web Version switch badge (Click to toggle Web A vs Web K)
         val versionBadge = TextView(this).apply {
@@ -563,6 +580,31 @@ class FloatingBrowserService : Service() {
             }
         }
 
+        // Quick Send Button (Directly triggers send in Telegram / Web Chat)
+        val sendBtn = ImageView(this).apply {
+            setImageResource(android.R.drawable.ic_menu_send)
+            setColorFilter(0xFF00E676.toInt()) // Vibrant Green
+            setPadding(dp(5), dp(5), dp(5), dp(5))
+            layoutParams = LinearLayout.LayoutParams(dp(28), dp(28))
+            setOnClickListener {
+                triggerSendMessageInWeb()
+            }
+        }
+
+        // Scroll to latest messages button (Down arrow)
+        val scrollDownBtn = ImageView(this).apply {
+            setImageResource(android.R.drawable.arrow_down_float)
+            setColorFilter(0xFF388AF6.toInt()) // Telegram blue
+            setPadding(dp(6), dp(6), dp(6), dp(6))
+            layoutParams = LinearLayout.LayoutParams(dp(28), dp(28))
+            setOnClickListener {
+                scrollToLatestMessages()
+                Toast.makeText(this@FloatingBrowserService, "সর্বশেষ মেসেজে স্ক্রল করা হচ্ছে...", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        rightControls.addView(sendBtn)
+        rightControls.addView(scrollDownBtn)
         rightControls.addView(keyboardBtn)
         rightControls.addView(clearDataBtn)
         rightControls.addView(reloadBtn)
@@ -600,6 +642,120 @@ class FloatingBrowserService : Service() {
 
         card.addView(header)
 
+        // --- 1.5 Normal Browser Address Bar & Navigation Strip ---
+        val addressBarStrip = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setBackgroundColor(0xFF222634.toInt())
+            setPadding(dp(4), dp(3), dp(4), dp(3))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(36)
+            )
+        }
+
+        // Back button (◀)
+        val navBackBtn = ImageView(this).apply {
+            setImageResource(android.R.drawable.ic_media_previous)
+            setColorFilter(0xFFB0B7C3.toInt())
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+            layoutParams = LinearLayout.LayoutParams(dp(26), dp(26))
+            setOnClickListener {
+                if (webView?.canGoBack() == true) webView?.goBack()
+            }
+        }
+        addressBarStrip.addView(navBackBtn)
+
+        // Forward button (▶)
+        val navForwardBtn = ImageView(this).apply {
+            setImageResource(android.R.drawable.ic_media_next)
+            setColorFilter(0xFFB0B7C3.toInt())
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+            layoutParams = LinearLayout.LayoutParams(dp(26), dp(26))
+            setOnClickListener {
+                if (webView?.canGoForward() == true) webView?.goForward()
+            }
+        }
+        addressBarStrip.addView(navForwardBtn)
+
+        // Address Bar EditText
+        val urlEditText = EditText(this).apply {
+            setText(initialUrl)
+            textSize = 10.5f
+            setTextColor(0xFFFFFFFF.toInt())
+            setHintTextColor(0xFF8E95A5.toInt())
+            hint = "ওয়েবসাইট লিখুন বা সার্চ করুন..."
+            isSingleLine = true
+            imeOptions = EditorInfo.IME_ACTION_GO
+            val bg = GradientDrawable().apply {
+                setColor(0xFF141720.toInt())
+                cornerRadius = dp(14).toFloat()
+                setStroke(dp(0.8f), 0x33FFFFFF.toInt())
+            }
+            background = bg
+            setPadding(dp(8), dp(2), dp(8), dp(2))
+            layoutParams = LinearLayout.LayoutParams(0, dp(28), 1f).apply {
+                setMargins(dp(3), 0, dp(3), 0)
+            }
+            setOnFocusChangeListener { _, hasFocus ->
+                if (hasFocus) {
+                    acquireFocusForFloatingWindow()
+                    selectAll()
+                }
+            }
+            setOnEditorActionListener { _, actionId, _ ->
+                if (actionId == EditorInfo.IME_ACTION_GO || actionId == EditorInfo.IME_ACTION_DONE) {
+                    navigateToUrl(text.toString())
+                    val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+                    imm?.hideSoftInputFromWindow(windowToken, 0)
+                    true
+                } else false
+            }
+        }
+        addressBarInput = urlEditText
+        addressBarStrip.addView(urlEditText)
+
+        // Open in Chrome / Phone Browser Button (🌐)
+        val openInChromeBtn = ImageView(this).apply {
+            setImageResource(android.R.drawable.ic_menu_compass)
+            setColorFilter(0xFF388AF6.toInt())
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+            layoutParams = LinearLayout.LayoutParams(dp(26), dp(26))
+            setOnClickListener {
+                try {
+                    val targetUrl = currentLoadedUrl.ifBlank { webView?.url ?: DEFAULT_TELEGRAM_URL }
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(targetUrl)).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    }
+                    startActivity(intent)
+                    Toast.makeText(this@FloatingBrowserService, "Chrome / ব্রাউজারে ওপেন করা হচ্ছে...", Toast.LENGTH_SHORT).show()
+                } catch (e: Exception) {
+                    Toast.makeText(this@FloatingBrowserService, "ব্রাউজার ওপেন করা যায়নি", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+        addressBarStrip.addView(openInChromeBtn)
+
+        // Open in Full App Browser Activity Button (📑)
+        val openFullAppBtn = ImageView(this).apply {
+            setImageResource(android.R.drawable.ic_menu_agenda)
+            setColorFilter(0xFF00E676.toInt())
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+            layoutParams = LinearLayout.LayoutParams(dp(26), dp(26))
+            setOnClickListener {
+                try {
+                    val intent = Intent(this@FloatingBrowserService, MiniBrowserActivity::class.java).apply {
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    }
+                    startActivity(intent)
+                    Toast.makeText(this@FloatingBrowserService, "ফুল ব্রাউজার অ্যাক্টিভিটি ওপেন হচ্ছে...", Toast.LENGTH_SHORT).show()
+                } catch (_: Exception) {}
+            }
+        }
+        addressBarStrip.addView(openFullAppBtn)
+
+        card.addView(addressBarStrip)
+
         // --- 2. Progress Bar ---
         val progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             layoutParams = LinearLayout.LayoutParams(
@@ -619,7 +775,14 @@ class FloatingBrowserService : Service() {
             )
         }
 
-        webView = WebView(this).apply {
+        webView = object : WebView(this) {
+            override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+                if (event.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_UP) {
+                    triggerSendMessageInWeb()
+                }
+                return super.dispatchKeyEvent(event)
+            }
+        }.apply {
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT
@@ -661,8 +824,6 @@ class FloatingBrowserService : Service() {
                 mediaPlaybackRequiresUserGesture = false
                 mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                 setSupportMultipleWindows(false)
-                // Clean modern Chrome Mobile user agent without conflicting tokens
-                userAgentString = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
             }
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
@@ -743,6 +904,7 @@ class FloatingBrowserService : Service() {
                     progressBar.visibility = View.GONE
                     url?.let {
                         currentLoadedUrl = it
+                        addressBarInput?.setText(it)
                         if (it.contains("web.telegram.org/k")) {
                             isUsingVersionK = true
                             versionBadgeText?.text = "Web K"
@@ -981,6 +1143,129 @@ class FloatingBrowserService : Service() {
         try {
             windowManager?.updateViewLayout(floatingView, p)
         } catch (_: Exception) {}
+    }
+
+    private fun toggleMaximize() {
+        val wm = windowManager ?: return
+        val root = floatingView ?: return
+        val p = params ?: return
+        val displayMetrics = resources.displayMetrics
+        val screenWidth = displayMetrics.widthPixels
+        val screenHeight = displayMetrics.heightPixels
+
+        if (!isMaximized) {
+            preMaximizeWidth = p.width
+            preMaximizeHeight = p.height
+            preMaximizeX = p.x
+            preMaximizeY = p.y
+
+            val maxWidth = (screenWidth * 0.96f).toInt()
+            val maxHeight = (screenHeight * 0.86f).toInt()
+
+            p.width = maxWidth
+            p.height = maxHeight
+            p.x = (screenWidth - maxWidth) / 2
+            p.y = dp(24)
+
+            isMaximized = true
+            maxBtnView?.setImageResource(android.R.drawable.ic_menu_revert)
+            Toast.makeText(this, "উইন্ডো বড় করা হয়েছে - সব মেসেজ স্পষ্ট দেখতে পাবেন", Toast.LENGTH_SHORT).show()
+        } else {
+            p.width = if (preMaximizeWidth > 0) preMaximizeWidth else savedWidth
+            p.height = if (preMaximizeHeight > 0) preMaximizeHeight else savedHeight
+            p.x = preMaximizeX
+            p.y = preMaximizeY
+
+            isMaximized = false
+            maxBtnView?.setImageResource(android.R.drawable.ic_menu_always_landscape_portrait)
+            Toast.makeText(this, "উইন্ডো স্বাভাবিক আকারে ফিরে এসেছে", Toast.LENGTH_SHORT).show()
+        }
+
+        try {
+            wm.updateViewLayout(root, p)
+            scrollToLatestMessages()
+        } catch (_: Exception) {}
+    }
+
+    fun triggerSendMessageInWeb() {
+        acquireFocusForFloatingWindow()
+        val js = """
+            (function() {
+                // 1. Try clicking common web messenger send buttons (Telegram Web K, Web A, etc.)
+                var selectors = [
+                    'button.btn-send',
+                    'button.tgico-send',
+                    'button[title*="Send"]',
+                    'button[aria-label*="Send"]',
+                    'button.send',
+                    '.btn-circle.btn-primary',
+                    '.chat-input-control.send',
+                    '.btn-send-message',
+                    'button[data-testid="send-button"]'
+                ];
+                for (var i = 0; i < selectors.length; i++) {
+                    var btn = document.querySelector(selectors[i]);
+                    if (btn && btn.offsetParent !== null) {
+                        btn.click();
+                        return 'clicked_' + selectors[i];
+                    }
+                }
+
+                // 2. Dispatch simulated Enter events to active editable / input
+                var target = document.activeElement;
+                if (!target || target.tagName === 'BODY') {
+                    target = document.querySelector('div[contenteditable="true"], .input-message-input, #editable-message-text, textarea, input[type="text"]');
+                }
+                if (target) {
+                    target.focus();
+                    var ev1 = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
+                    target.dispatchEvent(ev1);
+                    var ev2 = new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
+                    target.dispatchEvent(ev2);
+                    var ev3 = new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
+                    target.dispatchEvent(ev3);
+                    if (target.form) target.form.submit();
+                    return 'dispatched_enter';
+                }
+                return 'no_target';
+            })();
+        """.trimIndent()
+        webView?.evaluateJavascript(js) { res ->
+            android.util.Log.d("FloatingBrowser", "triggerSendMessage result: $res")
+        }
+    }
+
+    fun scrollToLatestMessages() {
+        val js = """
+            (function() {
+                var containers = document.querySelectorAll('.bubbles, .messages-container, .bubbles-inner, .chat-history, .Transition, .MessageList, .messages-layout, .chat-container');
+                for (var i = 0; i < containers.length; i++) {
+                    var c = containers[i];
+                    c.scrollTop = c.scrollHeight + 10000;
+                }
+                var downBtn = document.querySelector('.btn-circle.btn-to-bottom, .scroll-to-bottom, .btn-scroll-down, .bottom-button');
+                if (downBtn && downBtn.offsetParent !== null) {
+                    downBtn.click();
+                }
+                window.scrollTo(0, document.body.scrollHeight);
+            })();
+        """.trimIndent()
+        webView?.evaluateJavascript(js, null)
+    }
+
+    private fun navigateToUrl(raw: String) {
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty()) return
+        val url = if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+            trimmed
+        } else if (trimmed.contains(".") && !trimmed.contains(" ")) {
+            "https://$trimmed"
+        } else {
+            "https://www.google.com/search?q=" + Uri.encode(trimmed)
+        }
+        currentLoadedUrl = url
+        addressBarInput?.setText(url)
+        webView?.loadUrl(url)
     }
 
     private fun dp(v: Float): Int {

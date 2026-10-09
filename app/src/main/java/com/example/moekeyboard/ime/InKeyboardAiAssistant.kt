@@ -141,7 +141,7 @@ fun InKeyboardAiAssistant(
                     BuildConfig::class.java.getField("GEMINI_API_KEY").get(null) as? String ?: ""
                 } catch (_: Exception) { "" }
 
-                if (apiKey.isNotBlank()) {
+                if (apiKey.isNotBlank() && !apiKey.contains("Placeholder")) {
                     val client = OkHttpClient.Builder()
                         .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
                         .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
