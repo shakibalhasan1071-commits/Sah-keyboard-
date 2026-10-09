@@ -1,0 +1,6 @@
+{
+  "name": "Sah Keyboard",
+  "description": "Gboard-style Bengali and English keyboard with apps drawer, voice typing in Bengali & English, in-keyboard mini browser, and temp mail.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

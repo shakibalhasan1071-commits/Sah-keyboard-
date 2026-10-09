@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">Sah Keyboard</string>
+    <string name="ime_service_name">Sah Keyboard (বাংলা &amp; English)</string>
+    <string name="ime_settings">Sah Keyboard Settings</string>
+    <string name="ime_subtype_bengali">বাংলা (Bengali)</string>
+    <string name="ime_subtype_english">English (US)</string>
+</resources>

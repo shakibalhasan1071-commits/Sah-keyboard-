@@ -1,0 +1,563 @@
+================================================================================
+TEMPMAIL.LOL & TEMP-MAIL.IO INTEGRATION ARCHITECTURE GUIDE & FULL SOURCE CODE
+================================================================================
+Developed for: Custom Android IME / Android WebView Projects
+Language: Kotlin (Android) & JavaScript (WebView Injection)
+Features:
+ 1. Double Reset Prevention via Fast API + LocalStorage Injection
+ 2. Auto-Clicking incoming bottom message cards on TempMail.lol
+ 3. Dual (1st & 2nd) OTP Detection using Reverse Scan & Exclude Filter
+ 4. Sheet Storage System for Pinned Accounts (Save, Delete, Copy All)
+================================================================================
+
+
+--------------------------------------------------------------------------------
+TABLE OF CONTENTS:
+--------------------------------------------------------------------------------
+ 1. Architecture Flow & Workflow Explanation
+ 2. MODULE 1: TempMailManager.kt (Core API & Data Persistence)
+ 3. MODULE 2: WebView JavaScript Injections (DOM Clicker & State Injection)
+ 4. MODULE 3: Background Coroutine Polling Loop (1st & 2nd OTP Handler)
+ 5. MODULE 4: Pinned Accounts Sheet Management
+ 6. How to Integrate into Another Android Project
+
+
+================================================================================
+1. ARCHITECTURE FLOW & WORKFLOW EXPLANATION
+================================================================================
+
+[User Clicks Shortcut / Generate Button]
+              │
+              ▼
+[Step 1: Background API Call]
+- Calls https://api.tempmail.lol/v2/inbox/create (or temp-mail.io /email/new)
+- Retrieves fresh 'address' and 'token' in < 300ms without loading the entire website
+              │
+              ▼
+[Step 2: WebView LocalStorage Injection & Page Load]
+- Injects address, token, expires_at into WebView's localStorage
+- Loads the URL cleanly: avoids the browser generating a duplicate address (stops double reset!)
+- Automatically inserts the email into current EditText & copies to Android Clipboard
+              │
+              ▼
+[Step 3: Background Coroutine Polling (2-Second Interval Loop)]
+- Triggers JS script: finds the newest card at the bottom (`.email, div.email`), scrolls and clicks it
+- Inspects localStorage.getItem('emails') or DOM modal content
+- Extracts 4-8 digit OTP using high-precision Regex patterns
+- When 1st OTP arrives -> Notifies user & stores in `excludeOtp`
+- Keeps polling! When 2nd OTP arrives (for password/2-step auth) -> Filters out 1st OTP, captures 2nd OTP!
+
+
+================================================================================
+2. MODULE 1: TempMailManager.kt (Core API & OTP Extraction)
+================================================================================
+
+```kotlin
+package com.example.tempmail
+
+import android.content.Context
+import android.content.SharedPreferences
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.io.OutputStreamWriter
+import java.net.HttpURLConnection
+import java.net.URL
+import java.text.SimpleDateFormat
+import java.util.*
+
+data class SavedTempMailAccount(
+    val email: String,
+    val password: String = "",
+    val domain: String = "",
+    val username: String = "",
+    val createdAt: String = "",
+    val token: String = "",
+    val provider: String = "tempmail_lol",
+    val lastReceivedOtp: String = "",
+    val lastSubject: String = ""
+)
+
+data class TempMailMessage(
+    val id: String,
+    val from: String,
+    val subject: String,
+    val date: String,
+    var body: String = "",
+    var htmlBody: String = "",
+    var extractedOtp: String? = null
+)
+
+class TempMailManager private constructor(private val context: Context) {
+    private val prefs: SharedPreferences =
+        context.getSharedPreferences("temp_mail_storage_prefs", Context.MODE_PRIVATE)
+
+    var currentEmail: String = ""
+        private set
+    var currentToken: String = ""
+        private set
+    var currentProvider: String = "tempmail_lol"
+        private set
+
+    companion object {
+        @Volatile
+        private var INSTANCE: TempMailManager? = null
+
+        fun getInstance(context: Context): TempMailManager {
+            return INSTANCE ?: synchronized(this) {
+                INSTANCE ?: TempMailManager(context.applicationContext).also { INSTANCE = it }
+            }
+        }
+
+        private const val KEY_SHEET_ACCOUNTS = "sheet_accounts_json"
+    }
+
+    // -------------------------------------------------------------
+    // 1. Generate new TempMail.lol inbox via API
+    // -------------------------------------------------------------
+    suspend fun generateNewTempMailLolAccount(): String = withContext(Dispatchers.IO) {
+        var newEmail = ""
+        var newToken = ""
+        try {
+            val url = URL("https://api.tempmail.lol/v2/inbox/create")
+            val conn = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 5000
+                readTimeout = 5000
+                setRequestProperty("Accept", "application/json")
+                setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 10)")
+            }
+            if (conn.responseCode in 200..299) {
+                val resp = conn.inputStream.bufferedReader().readText()
+                val obj = JSONObject(resp)
+                newEmail = obj.optString("address", "")
+                newToken = obj.optString("token", "")
+            }
+        } catch (_: Exception) {}
+
+        if (newEmail.isNotBlank()) {
+            currentEmail = newEmail
+            currentToken = newToken
+            currentProvider = "tempmail_lol"
+        }
+        return@withContext newEmail
+    }
+
+    // -------------------------------------------------------------
+    // 2. Fetch Inbox Messages
+    // -------------------------------------------------------------
+    suspend fun fetchInbox(): List<TempMailMessage> = withContext(Dispatchers.IO) {
+        val messages = mutableListOf<TempMailMessage>()
+        if (currentToken.isBlank()) return@withContext messages
+        try {
+            val url = URL("https://api.tempmail.lol/v2/inbox?token=$currentToken")
+            val conn = (url.openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 6000
+                readTimeout = 6000
+                setRequestProperty("Accept", "application/json")
+            }
+            if (conn.responseCode in 200..299) {
+                val resp = conn.inputStream.bufferedReader().readText()
+                val root = JSONObject(resp)
+                val emailsArr = root.optJSONArray("emails")
+                if (emailsArr != null) {
+                    for (i in 0 until emailsArr.length()) {
+                        val obj = emailsArr.getJSONObject(i)
+                        val from = obj.optString("from", "Unknown")
+                        val subject = obj.optString("subject", "(No Subject)")
+                        val body = obj.optString("body", "")
+                        val html = obj.optString("html", "")
+                        val date = obj.optString("date", "")
+                        val cleanBody = body.ifBlank { html.replace(Regex("<[^>]*>"), "") }
+                        val otp = extractOtpCode("$subject $cleanBody") ?: extractOtpCode(html)
+                        
+                        messages.add(
+                            TempMailMessage(
+                                id = i.toString(),
+                                from = from,
+                                subject = subject,
+                                date = date,
+                                body = cleanBody,
+                                htmlBody = html,
+                                extractedOtp = otp
+                            )
+                        )
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+        return@withContext messages
+    }
+
+    // -------------------------------------------------------------
+    // 3. Extract Latest OTP (Supports 1st & 2nd OTP via excludeOtp)
+    // -------------------------------------------------------------
+    suspend fun extractLatestOtp(excludeOtp: String? = null): Pair<String?, String?> = withContext(Dispatchers.IO) {
+        if (currentEmail.isBlank()) return@withContext Pair(null, null)
+        try {
+            val messages = fetchInbox()
+            // In tempmail.lol, newer incoming messages are placed at the bottom (end of list)
+            // Reversing the list prioritizes newest messages first!
+            val reversed = messages.asReversed()
+
+            // 1. Match fresh OTP that does NOT equal previous excludeOtp
+            for (msg in reversed) {
+                val otp = msg.extractedOtp ?: extractOtpCode("${msg.subject} ${msg.body}")
+                if (!otp.isNullOrBlank() && (excludeOtp == null || otp != excludeOtp)) {
+                    return@withContext Pair(otp, msg.subject)
+                }
+            }
+
+            // 2. Fallback to any valid OTP
+            for (msg in reversed) {
+                val otp = msg.extractedOtp ?: extractOtpCode("${msg.subject} ${msg.body}")
+                if (!otp.isNullOrBlank()) {
+                    return@withContext Pair(otp, msg.subject)
+                }
+            }
+        } catch (_: Exception) {}
+        return@withContext Pair(null, null)
+    }
+
+    // -------------------------------------------------------------
+    // 4. High-Precision Regex Code Extractor
+    // -------------------------------------------------------------
+    fun extractOtpCode(content: String): String? {
+        if (content.isBlank()) return null
+        val patterns = listOf(
+            Regex("""(?:confirmation\s+code|verification\s+code|security\s+code|confirm\s+code|login\s+code|passcode)\D{0,35}?([0-9]{6})\b""", RegexOption.IGNORE_CASE),
+            Regex("""(?:FB|Meta|Facebook|Google|WhatsApp|IG|Instagram)\s*[-:_]?\s*([0-9]{6})\b""", RegexOption.IGNORE_CASE),
+            Regex("""(?:code|otp|pin)\s*[:=-]?\s*([0-9]{6})\b""", RegexOption.IGNORE_CASE),
+            Regex("""\b([0-9]{3}[-\s][0-9]{3})\b"""),
+            Regex("""(?:is|is:)\s*([0-9]{6})\b""", RegexOption.IGNORE_CASE),
+            Regex("""(?:confirmation\s+code|verification\s+code|security\s+code|confirm\s+code|login\s+code|passcode)\D{0,35}?([0-9]{4,8})\b""", RegexOption.IGNORE_CASE),
+            Regex("""(?:code|otp|pin|passcode|verification)\s*[:=-]?\s*([0-9]{4,8})\b""", RegexOption.IGNORE_CASE)
+        )
+
+        for (regex in patterns) {
+            val match = regex.find(content)
+            if (match != null) {
+                val candidate = match.groupValues.lastOrNull()?.replace("-", "")?.replace(" ", "")
+                if (!candidate.isNullOrBlank() && candidate.length in 4..8) {
+                    return candidate
+                }
+            }
+        }
+        return null
+    }
+
+    // -------------------------------------------------------------
+    // 5. Sheet (Pinned Accounts) Management
+    // -------------------------------------------------------------
+    fun getSheetAccounts(): List<SavedTempMailAccount> {
+        val list = mutableListOf<SavedTempMailAccount>()
+        val json = prefs.getString(KEY_SHEET_ACCOUNTS, null) ?: return list
+        try {
+            val jsonArr = JSONArray(json)
+            for (i in 0 until jsonArr.length()) {
+                val obj = jsonArr.getJSONObject(i)
+                list.add(
+                    SavedTempMailAccount(
+                        email = obj.optString("email"),
+                        createdAt = obj.optString("createdAt"),
+                        provider = obj.optString("provider", "tempmail_lol"),
+                        lastReceivedOtp = obj.optString("lastReceivedOtp", "")
+                    )
+                )
+            }
+        } catch (_: Exception) {}
+        return list
+    }
+
+    fun saveAccountToSheet(account: SavedTempMailAccount) {
+        val list = getSheetAccounts().toMutableList()
+        list.removeAll { it.email.equals(account.email, ignoreCase = true) }
+        list.add(0, account)
+        val jsonArr = JSONArray()
+        for (item in list) {
+            val obj = JSONObject().apply {
+                put("email", item.email)
+                put("createdAt", item.createdAt)
+                put("provider", item.provider)
+                put("lastReceivedOtp", item.lastReceivedOtp)
+            }
+            jsonArr.put(obj)
+        }
+        prefs.edit().putString(KEY_SHEET_ACCOUNTS, jsonArr.toString()).apply()
+    }
+
+    fun deleteSheetAccount(email: String) {
+        val list = getSheetAccounts().toMutableList()
+        list.removeAll { it.email.equals(email, ignoreCase = true) }
+        val jsonArr = JSONArray()
+        for (item in list) {
+            val obj = JSONObject().apply {
+                put("email", item.email)
+                put("createdAt", item.createdAt)
+                put("provider", item.provider)
+                put("lastReceivedOtp", item.lastReceivedOtp)
+            }
+            jsonArr.put(obj)
+        }
+        prefs.edit().putString(KEY_SHEET_ACCOUNTS, jsonArr.toString()).apply()
+    }
+
+    fun clearSheet() {
+        prefs.edit().remove(KEY_SHEET_ACCOUNTS).apply()
+    }
+}
+```
+
+
+================================================================================
+3. MODULE 2: WEBVIEW JAVASCRIPT INJECTION SCRIPTS
+================================================================================
+
+### A. State Injection & Fast Reload (No Double Reset)
+Executed in Kotlin before `webView.loadUrl("https://tempmail.lol")`:
+
+```kotlin
+fun injectFastAccount(webView: WebView, newEmail: String, newToken: String, onDone: () -> Unit) {
+    webView.evaluateJavascript("""
+        (function() {
+            try {
+                localStorage.setItem('address', '$newEmail');
+                localStorage.setItem('address_token', '$newToken');
+                localStorage.removeItem('emails'); // Clean old messages
+                localStorage.setItem('expires_at', (Date.now() + 3600000).toString());
+            } catch(e) {}
+            return 'injected';
+        })();
+    """.trimIndent()) {
+        webView.stopLoading()
+        webView.loadUrl("https://tempmail.lol")
+        onDone()
+    }
+}
+```
+
+### B. Auto-Click Bottom Incoming Message Card
+Executed periodically during background polling:
+
+```javascript
+(function() {
+    try {
+        if (window.location.href.indexOf('tempmail.lol') !== -1) {
+            var emailCards = document.querySelectorAll('.email, div.email');
+            if (emailCards && emailCards.length > 0) {
+                // Get the newest card at the bottom of the list
+                var lastCard = emailCards[emailCards.length - 1];
+                lastCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                lastCard.click();
+            }
+        }
+    } catch(e) {}
+})();
+```
+
+### C. Extract OTP from localStorage Emails Array or DOM (Supports Exclude OTP)
+
+```javascript
+(function(excludeOtp) {
+    try {
+        var excluded = excludeOtp || '';
+
+        function extractCodeFromStr(str) {
+            if (!str) return '';
+            var patterns = [
+                /(?:confirmation\s+code|verification\s+code|security\s+code|confirm\s+code|login\s+code|passcode)\D{0,35}?([0-9]{6})\b/i,
+                /(?:FB|Meta|Facebook|Google|WhatsApp|IG|Instagram)\s*[-:_]?\s*([0-9]{6})\b/i,
+                /(?:code|otp|pin)\s*[:=-]?\s*([0-9]{6})\b/i,
+                /\b([0-9]{3}[-\s][0-9]{3})\b/,
+                /(?:code|otp|pin|passcode|verification)\s*[:=-]?\s*([0-9]{4,8})\b/i
+            ];
+            for (var p = 0; p < patterns.length; p++) {
+                var m = str.match(patterns[p]);
+                if (m && m.length > 0) {
+                    var candidate = m[m.length - 1].replace(/[- ]/g, '').trim();
+                    if (candidate.length >= 4 && candidate.length <= 8) {
+                        if (!excluded || candidate !== excluded) {
+                            return candidate;
+                        }
+                    }
+                }
+            }
+            return '';
+        }
+
+        // 1. Direct Inspection of tempmail.lol localStorage 'emails' array
+        if (window.location.href.indexOf('tempmail.lol') !== -1) {
+            var rawEmails = window.localStorage.getItem('emails');
+            if (rawEmails) {
+                var arr = JSON.parse(rawEmails);
+                if (Array.isArray(arr) && arr.length > 0) {
+                    // Iterate from newest (end of array) backwards
+                    for (var idx = arr.length - 1; idx >= 0; idx--) {
+                        var em = arr[idx];
+                        var fullText = (em.subject || '') + ' ' + (em.body || '') + ' ' + (em.html || '');
+                        var found = extractCodeFromStr(fullText);
+                        if (found) return found;
+                    }
+                }
+            }
+        }
+
+        // 2. Scan DOM modal or message container
+        var container = document.querySelector('.modal-content, .modal, .email-view, [data-qa="message-body"]');
+        if (container) {
+            var txt = container.innerText || container.textContent || '';
+            var cand = extractCodeFromStr(txt);
+            if (cand) return cand;
+        }
+
+        return '';
+    } catch(e) {
+        return '';
+    }
+})('EXCLUDE_OTP_HERE');
+```
+
+
+================================================================================
+4. MODULE 3: BACKGROUND COROUTINE POLLING LOOP (1st & 2nd OTP)
+================================================================================
+
+```kotlin
+// Example in a ViewModel or Keyboard Compose lifecycle:
+var otpPollingJob: Job? = null
+var latestDetectedOtp by mutableStateOf<String?>(null)
+
+fun startOtpPolling(context: Context, webView: WebView) {
+    otpPollingJob?.cancel()
+    otpPollingJob = CoroutineScope(Dispatchers.Main).launch {
+        var attempts = 0
+        var lastSeenOtp: String? = null
+        var otpArrivalCount = 0
+        val tempMailManager = TempMailManager.getInstance(context)
+
+        while (attempts < 60) { // Poll for up to 120 seconds (60 * 2000ms)
+            delay(2000)
+            attempts++
+
+            // 1. Auto click newest message at bottom
+            webView.evaluateJavascript("""
+                (function() {
+                    try {
+                        var cards = document.querySelectorAll('.email, div.email');
+                        if (cards && cards.length > 0) {
+                            cards[cards.length - 1].click();
+                        }
+                    } catch(e) {}
+                })();
+            """.trimIndent(), null)
+
+            // 2. Check for OTP (excluding previous OTP for 2nd code)
+            val extractedOtp = withContext(Dispatchers.IO) {
+                tempMailManager.extractLatestOtp(excludeOtp = lastSeenOtp).first
+            }
+
+            if (!extractedOtp.isNullOrBlank() && extractedOtp != lastSeenOtp) {
+                lastSeenOtp = extractedOtp
+                latestDetectedOtp = extractedOtp
+                otpArrivalCount++
+
+                val ordinal = if (otpArrivalCount == 1) "১ম (1st)" else if (otpArrivalCount == 2) "২য় (2nd)" else "${otpArrivalCount}th"
+                Toast.makeText(context, "$ordinal OTP কোড এসেছে: $extractedOtp", Toast.LENGTH_LONG).show()
+
+                // Copy code to clipboard automatically
+                val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                cb.setPrimaryClip(ClipData.newPlainText("OTP Code", extractedOtp))
+
+                // Stop after 2 OTPs are captured
+                if (otpArrivalCount >= 2) {
+                    break
+                }
+            }
+        }
+    }
+}
+```
+
+
+================================================================================
+5. MODULE 4: PINNED ACCOUNTS SHEET MANAGEMENT (Compose UI Example)
+================================================================================
+
+```kotlin
+@Composable
+fun EmailSheetView(
+    tempMailManager: TempMailManager,
+    onInsertEmail: (String) -> Unit
+) {
+    val context = LocalContext.current
+    var sheetList by remember { mutableStateOf(tempMailManager.getSheetAccounts()) }
+
+    Column(modifier = Modifier.fillMaxSize().background(Color(0xFF0D0E12))) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("সেভ করা ইমেল তালিকা (${sheetList.size})", color = Color.White, fontWeight = FontWeight.Bold)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = {
+                    val all = sheetList.joinToString("\n") { it.email }
+                    val cb = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    cb.setPrimaryClip(ClipData.newPlainText("All Emails", all))
+                    Toast.makeText(context, "সবগুলো ইমেল একসাথে কপি হয়েছে", Toast.LENGTH_SHORT).show()
+                }) {
+                    Text("সব কপি")
+                }
+                Button(onClick = {
+                    tempMailManager.clearSheet()
+                    sheetList = emptyList()
+                    Toast.makeText(context, "শীট ক্লিয়ার করা হয়েছে", Toast.LENGTH_SHORT).show()
+                }) {
+                    Text("সব মুছুন")
+                }
+            }
+        }
+
+        LazyColumn(modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp)) {
+            items(sheetList) { account ->
+                Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                    Row(
+                        modifier = Modifier.padding(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(account.email, fontWeight = FontWeight.Bold)
+                            Text(account.createdAt, fontSize = 10.sp, color = Color.Gray)
+                        }
+                        IconButton(onClick = { onInsertEmail(account.email) }) {
+                            Icon(Icons.Default.Input, contentDescription = "Insert")
+                        }
+                        IconButton(onClick = {
+                            tempMailManager.deleteSheetAccount(account.email)
+                            sheetList = tempMailManager.getSheetAccounts()
+                        }) {
+                            Icon(Icons.Default.Delete, contentDescription = "Delete", tint = Color.Red)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+```
+
+
+================================================================================
+6. INTEGRATION CHECKLIST FOR ANY PROJECT
+================================================================================
+1. Add `INTERNET` and `ACCESS_NETWORK_STATE` permissions in `AndroidManifest.xml`.
+2. Enable JavaScript and DomStorage on WebView:
+   - `settings.javaScriptEnabled = true`
+   - `settings.domStorageEnabled = true`
+3. Always generate address via API before loading WebView to eliminate double-generation lag and resets.
+4. Keep the Poller running asynchronously using Kotlin Coroutines `delay(2000)` and pass `excludeOtp = previousOtp` to effortlessly handle multiple consecutive verification codes.
+================================================================================
