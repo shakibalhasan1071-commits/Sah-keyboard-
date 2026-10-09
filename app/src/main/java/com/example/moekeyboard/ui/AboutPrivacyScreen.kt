@@ -81,13 +81,13 @@ fun AboutPrivacyScreen(
                         Spacer(modifier = Modifier.height(14.dp))
 
                         Text(
-                            text = "MOE Keyboard",
+                            text = "Sah Keyboard",
                             style = MaterialTheme.typography.headlineSmall,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onPrimaryContainer
                         )
                         Text(
-                            text = "বাংলা ও ইংরেজি আধুনিক কিবোর্ড • Version 1.0",
+                            text = "বাংলা ও ইংরেজি আধুনিক কিবোর্ড • Version 1.1.0",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
                         )

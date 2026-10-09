@@ -191,20 +191,21 @@ class FloatingBrowserService : Service() {
             WindowManager.LayoutParams.TYPE_PHONE
         }
 
-        // Generous, comfortable window size so chats and messages are fully visible
-        val initialWidth = (screenWidth * 0.90f).toInt().coerceIn(dp(320), dp(500))
-        val initialHeight = (screenHeight * 0.62f).toInt().coerceIn(dp(400), dp(720))
+        // 25% smaller default window size as requested by user
+        val initialWidth = (screenWidth * 0.68f).toInt().coerceIn(dp(250), dp(400))
+        val initialHeight = (screenHeight * 0.46f).toInt().coerceIn(dp(300), dp(520))
 
         savedWidth = initialWidth
         savedHeight = initialHeight
 
-        // WindowManager flags optimized for floating chat window:
-        // By default focusable for seamless typing, FLAG_NOT_TOUCH_MODAL allows outside touches to pass through
+        // WindowManager flags: FLAG_NOT_FOCUSABLE prevents overlay from stealing focus on startup
+        // This stops the keyboard from disappearing and prevents keyboard hanging!
         params = WindowManager.LayoutParams(
             initialWidth,
             initialHeight,
             layoutType,
-            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                     WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
             PixelFormat.TRANSLUCENT
         ).apply {
@@ -363,7 +364,7 @@ class FloatingBrowserService : Service() {
             setBackgroundColor(0xFF1E222D.toInt())
         }
 
-        // Left control container: Minimize & Telegram Version Switcher
+        // Left control container: ONLY Delete and Reload buttons
         val leftControls = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -372,130 +373,12 @@ class FloatingBrowserService : Service() {
                 FrameLayout.LayoutParams.MATCH_PARENT
             ).apply {
                 gravity = Gravity.START or Gravity.CENTER_VERTICAL
-                marginStart = dp(4)
+                marginStart = dp(6)
             }
             layoutParams = lp
         }
 
-        // Left control: Minimize / Mini bubble (-)
-        val minBtn = ImageView(this).apply {
-            setImageResource(android.R.drawable.ic_menu_crop)
-            setColorFilter(0xFFB0B7C3.toInt())
-            setPadding(dp(7), dp(7), dp(7), dp(7))
-            layoutParams = LinearLayout.LayoutParams(dp(28), dp(28))
-            setOnClickListener {
-                toggleMinimize()
-            }
-        }
-        leftControls.addView(minBtn)
-
-        // Left control: Maximize / Fullscreen toggle button ([ ])
-        val maxBtn = ImageView(this).apply {
-            setImageResource(android.R.drawable.ic_menu_always_landscape_portrait)
-            setColorFilter(0xFFB0B7C3.toInt())
-            setPadding(dp(6), dp(6), dp(6), dp(6))
-            layoutParams = LinearLayout.LayoutParams(dp(28), dp(28))
-            setOnClickListener {
-                toggleMaximize()
-            }
-        }
-        maxBtnView = maxBtn
-        leftControls.addView(maxBtn)
-
-        // Telegram Web Version switch badge (Click to toggle Web A vs Web K)
-        val versionBadge = TextView(this).apply {
-            text = "Web K"
-            textSize = 9.5f
-            setTextColor(0xFF388AF6.toInt())
-            val badgeBg = GradientDrawable().apply {
-                setColor(0x22388AF6.toInt())
-                cornerRadius = dp(5).toFloat()
-                setStroke(dp(1f), 0x55388AF6.toInt())
-            }
-            background = badgeBg
-            setPadding(dp(5), dp(2), dp(5), dp(2))
-            val badgeLp = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                marginStart = dp(4)
-            }
-            layoutParams = badgeLp
-            setOnClickListener {
-                switchTelegramVersion()
-            }
-        }
-        versionBadgeText = versionBadge
-        leftControls.addView(versionBadge)
-
-        // Focus Mode Badge: toggles between typing in floating window vs typing in background apps
-        val focusBadge = TextView(this).apply {
-            text = "📱 ব্যাকগ্রাউন্ড"
-            textSize = 9.5f
-            setTextColor(0xFF388AF6.toInt())
-            val badgeBg = GradientDrawable().apply {
-                setColor(0x22388AF6.toInt())
-                cornerRadius = dp(5).toFloat()
-                setStroke(dp(1f), 0x55388AF6.toInt())
-            }
-            background = badgeBg
-            setPadding(dp(5), dp(2), dp(5), dp(2))
-            val badgeLp = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                marginStart = dp(4)
-            }
-            layoutParams = badgeLp
-            setOnClickListener {
-                toggleFocusMode()
-            }
-        }
-        focusBadgeText = focusBadge
-        leftControls.addView(focusBadge)
-
-        header.addView(leftControls)
-
-        // Center pill / horizontal drag bar (Classic Vivo small window handle)
-        val centerPill = View(this).apply {
-            val pillDrawable = GradientDrawable().apply {
-                setColor(0xFF9EA6B8.toInt())
-                cornerRadius = dp(3).toFloat()
-            }
-            background = pillDrawable
-            val lp = FrameLayout.LayoutParams(dp(40), dp(3.5f).toInt()).apply {
-                gravity = Gravity.CENTER
-            }
-            layoutParams = lp
-        }
-        header.addView(centerPill)
-
-        // Right controls: Keyboard button, Reload & Close (x)
-        val rightControls = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            val lp = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-            ).apply {
-                gravity = Gravity.END or Gravity.CENTER_VERTICAL
-                marginEnd = dp(4)
-            }
-            layoutParams = lp
-        }
-
-        // Keyboard Button (Allows user to pop open keyboard instantly)
-        val keyboardBtn = ImageView(this).apply {
-            setImageResource(android.R.drawable.ic_menu_edit)
-            setColorFilter(0xFF388AF6.toInt())
-            setPadding(dp(5), dp(5), dp(5), dp(5))
-            layoutParams = LinearLayout.LayoutParams(dp(28), dp(28))
-            setOnClickListener {
-                showKeyboardForWebView()
-            }
-        }
-
-        // Clear Data / Delete (Trash) button
+        // Delete (Trash / Clear Cache & Data) button
         val clearDataBtn = ImageView(this).apply {
             setImageResource(android.R.drawable.ic_menu_delete)
             setColorFilter(0xFFEF4444.toInt()) // Red delete
@@ -510,7 +393,7 @@ class FloatingBrowserService : Service() {
                     webView?.clearFormData()
                     android.webkit.WebStorage.getInstance().deleteAllData()
                     
-                    Toast.makeText(this@FloatingBrowserService, "সব ডাটা, আইডি ও একাউন্ট মুছে ফেলা হয়েছে!", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@FloatingBrowserService, "সব ডাটা, আইডি ও ক্যাশ মুছে ফেলা হয়েছে!", Toast.LENGTH_SHORT).show()
                     val urlToLoad = currentLoadedUrl.ifBlank { initialUrl }
                     webView?.loadUrl(urlToLoad)
                 } catch (e: Exception) {
@@ -518,32 +401,16 @@ class FloatingBrowserService : Service() {
                 }
             }
         }
+        leftControls.addView(clearDataBtn)
 
-        // Telegram App Launch button
-        val tgAppBtn = ImageView(this).apply {
-            setImageResource(android.R.drawable.ic_menu_send)
-            setColorFilter(0xFF229ED9.toInt()) // Telegram blue
-            setPadding(dp(5), dp(5), dp(5), dp(5))
-            layoutParams = LinearLayout.LayoutParams(dp(28), dp(28))
-            setOnClickListener {
-                try {
-                    val intent = packageManager.getLaunchIntentForPackage("org.telegram.messenger") 
-                        ?: packageManager.getLaunchIntentForPackage("org.telegram.plus")
-                        ?: Intent(Intent.ACTION_VIEW, android.net.Uri.parse("tg://resolve"))
-                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    startActivity(intent)
-                } catch (e: Exception) {
-                    Toast.makeText(this@FloatingBrowserService, "টেলিগ্রাম অ্যাপ ইন্সটল করা নেই", Toast.LENGTH_SHORT).show()
-                }
-            }
-        }
-
-        // Reload / Sync button
+        // Reload (Sync) button
         val reloadBtn = ImageView(this).apply {
             setImageResource(android.R.drawable.ic_popup_sync)
-            setColorFilter(0xFFB0B7C3.toInt())
+            setColorFilter(0xFF388AF6.toInt()) // Blue reload
             setPadding(dp(5), dp(5), dp(5), dp(5))
-            layoutParams = LinearLayout.LayoutParams(dp(28), dp(28))
+            layoutParams = LinearLayout.LayoutParams(dp(28), dp(28)).apply {
+                marginStart = dp(6)
+            }
             setOnClickListener {
                 webView?.let { wv ->
                     wv.clearCache(true)
@@ -561,54 +428,58 @@ class FloatingBrowserService : Service() {
                     webView?.clearHistory()
                     webView?.clearFormData()
                     android.webkit.WebStorage.getInstance().deleteAllData()
-                    Toast.makeText(this@FloatingBrowserService, "ডাটা ও আইডি মুছে রিলোড করা হচ্ছে...", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@FloatingBrowserService, "ডাটা মুছে রিলোড করা হচ্ছে...", Toast.LENGTH_SHORT).show()
                     val targetUrl = currentLoadedUrl.ifBlank { initialUrl }
                     webView?.loadUrl(targetUrl)
                 } catch (_: Exception) {}
                 true
             }
         }
+        leftControls.addView(reloadBtn)
 
-        // Close (x) button
+        header.addView(leftControls)
+
+        // Right control container: Type/Keyboard (⌨️) and Close (✕) buttons
+        val rightControls = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            val lp = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            ).apply {
+                gravity = Gravity.END or Gravity.CENTER_VERTICAL
+                marginEnd = dp(6)
+            }
+            layoutParams = lp
+        }
+
+        // Type / Keyboard button (Allows typing in floating window message box easily)
+        val typeBtn = ImageView(this).apply {
+            setImageResource(android.R.drawable.ic_menu_edit)
+            setColorFilter(0xFF10B981.toInt()) // Green edit icon
+            setPadding(dp(5), dp(5), dp(5), dp(5))
+            layoutParams = LinearLayout.LayoutParams(dp(28), dp(28)).apply {
+                marginEnd = dp(4)
+            }
+            setOnClickListener {
+                showKeyboardForWebView()
+                Toast.makeText(this@FloatingBrowserService, "মেসেজ লিখার জন্য কিবোর্ড চালু হয়েছে", Toast.LENGTH_SHORT).show()
+            }
+        }
+        rightControls.addView(typeBtn)
+
+        // Close (✕) button requested by user
         val closeBtn = ImageView(this).apply {
             setImageResource(android.R.drawable.ic_menu_close_clear_cancel)
-            setColorFilter(0xFFB0B7C3.toInt())
+            setColorFilter(0xFFFF4D4D.toInt()) // Red X
             setPadding(dp(5), dp(5), dp(5), dp(5))
             layoutParams = LinearLayout.LayoutParams(dp(28), dp(28))
             setOnClickListener {
                 stopSelf()
             }
         }
-
-        // Quick Send Button (Directly triggers send in Telegram / Web Chat)
-        val sendBtn = ImageView(this).apply {
-            setImageResource(android.R.drawable.ic_menu_send)
-            setColorFilter(0xFF00E676.toInt()) // Vibrant Green
-            setPadding(dp(5), dp(5), dp(5), dp(5))
-            layoutParams = LinearLayout.LayoutParams(dp(28), dp(28))
-            setOnClickListener {
-                triggerSendMessageInWeb()
-            }
-        }
-
-        // Scroll to latest messages button (Down arrow)
-        val scrollDownBtn = ImageView(this).apply {
-            setImageResource(android.R.drawable.arrow_down_float)
-            setColorFilter(0xFF388AF6.toInt()) // Telegram blue
-            setPadding(dp(6), dp(6), dp(6), dp(6))
-            layoutParams = LinearLayout.LayoutParams(dp(28), dp(28))
-            setOnClickListener {
-                scrollToLatestMessages()
-                Toast.makeText(this@FloatingBrowserService, "সর্বশেষ মেসেজে স্ক্রল করা হচ্ছে...", Toast.LENGTH_SHORT).show()
-            }
-        }
-
-        rightControls.addView(sendBtn)
-        rightControls.addView(scrollDownBtn)
-        rightControls.addView(keyboardBtn)
-        rightControls.addView(clearDataBtn)
-        rightControls.addView(reloadBtn)
         rightControls.addView(closeBtn)
+
         header.addView(rightControls)
 
         // Dragging handler on header:
@@ -641,120 +512,6 @@ class FloatingBrowserService : Service() {
         }
 
         card.addView(header)
-
-        // --- 1.5 Normal Browser Address Bar & Navigation Strip ---
-        val addressBarStrip = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setBackgroundColor(0xFF222634.toInt())
-            setPadding(dp(4), dp(3), dp(4), dp(3))
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(36)
-            )
-        }
-
-        // Back button (◀)
-        val navBackBtn = ImageView(this).apply {
-            setImageResource(android.R.drawable.ic_media_previous)
-            setColorFilter(0xFFB0B7C3.toInt())
-            setPadding(dp(4), dp(4), dp(4), dp(4))
-            layoutParams = LinearLayout.LayoutParams(dp(26), dp(26))
-            setOnClickListener {
-                if (webView?.canGoBack() == true) webView?.goBack()
-            }
-        }
-        addressBarStrip.addView(navBackBtn)
-
-        // Forward button (▶)
-        val navForwardBtn = ImageView(this).apply {
-            setImageResource(android.R.drawable.ic_media_next)
-            setColorFilter(0xFFB0B7C3.toInt())
-            setPadding(dp(4), dp(4), dp(4), dp(4))
-            layoutParams = LinearLayout.LayoutParams(dp(26), dp(26))
-            setOnClickListener {
-                if (webView?.canGoForward() == true) webView?.goForward()
-            }
-        }
-        addressBarStrip.addView(navForwardBtn)
-
-        // Address Bar EditText
-        val urlEditText = EditText(this).apply {
-            setText(initialUrl)
-            textSize = 10.5f
-            setTextColor(0xFFFFFFFF.toInt())
-            setHintTextColor(0xFF8E95A5.toInt())
-            hint = "ওয়েবসাইট লিখুন বা সার্চ করুন..."
-            isSingleLine = true
-            imeOptions = EditorInfo.IME_ACTION_GO
-            val bg = GradientDrawable().apply {
-                setColor(0xFF141720.toInt())
-                cornerRadius = dp(14).toFloat()
-                setStroke(dp(0.8f), 0x33FFFFFF.toInt())
-            }
-            background = bg
-            setPadding(dp(8), dp(2), dp(8), dp(2))
-            layoutParams = LinearLayout.LayoutParams(0, dp(28), 1f).apply {
-                setMargins(dp(3), 0, dp(3), 0)
-            }
-            setOnFocusChangeListener { _, hasFocus ->
-                if (hasFocus) {
-                    acquireFocusForFloatingWindow()
-                    selectAll()
-                }
-            }
-            setOnEditorActionListener { _, actionId, _ ->
-                if (actionId == EditorInfo.IME_ACTION_GO || actionId == EditorInfo.IME_ACTION_DONE) {
-                    navigateToUrl(text.toString())
-                    val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
-                    imm?.hideSoftInputFromWindow(windowToken, 0)
-                    true
-                } else false
-            }
-        }
-        addressBarInput = urlEditText
-        addressBarStrip.addView(urlEditText)
-
-        // Open in Chrome / Phone Browser Button (🌐)
-        val openInChromeBtn = ImageView(this).apply {
-            setImageResource(android.R.drawable.ic_menu_compass)
-            setColorFilter(0xFF388AF6.toInt())
-            setPadding(dp(4), dp(4), dp(4), dp(4))
-            layoutParams = LinearLayout.LayoutParams(dp(26), dp(26))
-            setOnClickListener {
-                try {
-                    val targetUrl = currentLoadedUrl.ifBlank { webView?.url ?: DEFAULT_TELEGRAM_URL }
-                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(targetUrl)).apply {
-                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                    }
-                    startActivity(intent)
-                    Toast.makeText(this@FloatingBrowserService, "Chrome / ব্রাউজারে ওপেন করা হচ্ছে...", Toast.LENGTH_SHORT).show()
-                } catch (e: Exception) {
-                    Toast.makeText(this@FloatingBrowserService, "ব্রাউজার ওপেন করা যায়নি", Toast.LENGTH_SHORT).show()
-                }
-            }
-        }
-        addressBarStrip.addView(openInChromeBtn)
-
-        // Open in Full App Browser Activity Button (📑)
-        val openFullAppBtn = ImageView(this).apply {
-            setImageResource(android.R.drawable.ic_menu_agenda)
-            setColorFilter(0xFF00E676.toInt())
-            setPadding(dp(4), dp(4), dp(4), dp(4))
-            layoutParams = LinearLayout.LayoutParams(dp(26), dp(26))
-            setOnClickListener {
-                try {
-                    val intent = Intent(this@FloatingBrowserService, MiniBrowserActivity::class.java).apply {
-                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
-                    }
-                    startActivity(intent)
-                    Toast.makeText(this@FloatingBrowserService, "ফুল ব্রাউজার অ্যাক্টিভিটি ওপেন হচ্ছে...", Toast.LENGTH_SHORT).show()
-                } catch (_: Exception) {}
-            }
-        }
-        addressBarStrip.addView(openFullAppBtn)
-
-        card.addView(addressBarStrip)
 
         // --- 2. Progress Bar ---
         val progressBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
@@ -796,12 +553,16 @@ class FloatingBrowserService : Service() {
             isFocusable = true
             isFocusableInTouchMode = true
 
-            // On touch down inside WebView, make window focusable so inputs work seamlessly without closing keyboard
+            // On tap inside WebView, make window focusable without dropping touch event
             setOnTouchListener { v, event ->
-                if (event.action == MotionEvent.ACTION_DOWN) {
-                    acquireFocusForFloatingWindow()
-                    if (!v.hasFocus()) {
-                        v.requestFocus()
+                if (event.action == MotionEvent.ACTION_UP) {
+                    if (!isWindowFocusedForInput) {
+                        acquireFocusForFloatingWindow()
+                        v.post {
+                            v.requestFocus()
+                            val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+                            imm?.showSoftInput(v, InputMethodManager.SHOW_IMPLICIT)
+                        }
                     }
                 }
                 false
@@ -976,29 +737,8 @@ class FloatingBrowserService : Service() {
         }
         root.addView(leftEdge)
 
-        // Bottom Edge
-        val bottomEdge = View(this).apply {
-            val lp = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, edgeSize).apply {
-                gravity = Gravity.BOTTOM
-                setMargins(cornerSize, 0, cornerSize, 0)
-            }
-            layoutParams = lp
-            attachResizeListener(this, resizeBottom = true)
-        }
-        root.addView(bottomEdge)
-
-        // Top Edge
-        val topEdge = View(this).apply {
-            val lp = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, edgeSize).apply {
-                gravity = Gravity.TOP
-                setMargins(cornerSize, 0, cornerSize, 0)
-            }
-            layoutParams = lp
-            attachResizeListener(this, resizeTop = true)
-        }
-        root.addView(topEdge)
-
-        // Bottom-Right Corner
+        // Bottom Edge is omitted to prevent obstructing chat message input fields and send buttons
+        // Bottom-Right Corner (Only corner kept at bottom for easy resizing)
         val bottomRightCorner = FrameLayout(this).apply {
             val lp = FrameLayout.LayoutParams(cornerSize, cornerSize).apply {
                 gravity = Gravity.BOTTOM or Gravity.END
@@ -1008,7 +748,7 @@ class FloatingBrowserService : Service() {
             val gripIndicator = ImageView(this@FloatingBrowserService).apply {
                 val iconLp = FrameLayout.LayoutParams(dp(12), dp(12)).apply {
                     gravity = Gravity.BOTTOM or Gravity.END
-                    setMargins(0, 0, dp(8), dp(8))
+                    setMargins(0, 0, dp(4), dp(4))
                 }
                 layoutParams = iconLp
                 val gripShape = GradientDrawable().apply {
@@ -1016,22 +756,12 @@ class FloatingBrowserService : Service() {
                     cornerRadius = dp(2).toFloat()
                 }
                 background = gripShape
-                alpha = 0.6f
+                alpha = 0.7f
             }
             addView(gripIndicator)
             attachResizeListener(this, resizeRight = true, resizeBottom = true)
         }
         root.addView(bottomRightCorner)
-
-        // Bottom-Left Corner
-        val bottomLeftCorner = View(this).apply {
-            val lp = FrameLayout.LayoutParams(cornerSize, cornerSize).apply {
-                gravity = Gravity.BOTTOM or Gravity.START
-            }
-            layoutParams = lp
-            attachResizeListener(this, resizeLeft = true, resizeBottom = true)
-        }
-        root.addView(bottomLeftCorner)
 
         // Top-Right Corner
         val topRightCorner = View(this).apply {

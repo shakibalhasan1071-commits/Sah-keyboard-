@@ -2668,7 +2668,7 @@ fun NormalKey(
         modifier = modifier
             .height(height)
             .shadow(
-                elevation = if (isPressed) 0.5.dp else 2.dp,
+                elevation = 1.dp,
                 shape = RoundedCornerShape(8.5.dp),
                 clip = false
             )
@@ -2728,7 +2728,7 @@ fun SpaceKey(
         modifier = modifier
             .height(height)
             .shadow(
-                elevation = if (isPressed) 0.5.dp else 1.8.dp,
+                elevation = 1.dp,
                 shape = RoundedCornerShape(8.5.dp),
                 clip = false
             )

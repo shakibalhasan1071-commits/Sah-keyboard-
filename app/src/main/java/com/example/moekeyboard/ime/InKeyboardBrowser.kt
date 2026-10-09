@@ -169,111 +169,67 @@ fun InKeyboardBrowser(
             .fillMaxSize()
             .background(bgColor)
     ) {
-        // Browser Toolbar
+        // Browser Toolbar: Delete and Reload buttons on left, Close (✕) button on right
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 8.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            // Navigation Controls
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Start
+            ) {
+                // Delete (Clear Cache & Data) button
                 IconButton(
-                    onClick = { 
-                        webView?.goBack()
-                        webView?.url?.let { 
-                            inputUrl = it
-                            onUrlChange(it)
-                        }
+                    onClick = {
+                        try {
+                            android.webkit.CookieManager.getInstance().removeAllCookies(null)
+                            android.webkit.CookieManager.getInstance().flush()
+                            webView?.clearCache(true)
+                            webView?.clearHistory()
+                            webView?.clearFormData()
+                            android.webkit.WebStorage.getInstance().deleteAllData()
+                            webView?.loadUrl(url)
+                        } catch (_: Exception) {}
                     },
-                    enabled = canGoBack,
-                    modifier = Modifier.size(24.dp)
+                    modifier = Modifier.size(28.dp)
                 ) {
                     Icon(
-                        imageVector = Icons.Default.ArrowBack,
-                        contentDescription = "Back",
-                        tint = if (canGoBack) textColor else textColor.copy(alpha = 0.3f),
-                        modifier = Modifier.size(18.dp)
+                        imageVector = Icons.Default.Delete,
+                        contentDescription = "Delete",
+                        tint = Color(0xFFEF4444),
+                        modifier = Modifier.size(20.dp)
                     )
                 }
-                IconButton(
-                    onClick = { 
-                        webView?.goForward()
-                        webView?.url?.let { 
-                            inputUrl = it
-                            onUrlChange(it)
-                        }
-                    },
-                    enabled = canGoForward,
-                    modifier = Modifier.size(24.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.ArrowForward,
-                        contentDescription = "Forward",
-                        tint = if (canGoForward) textColor else textColor.copy(alpha = 0.3f),
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                // Reload button
                 IconButton(
                     onClick = { webView?.reload() },
-                    modifier = Modifier.size(24.dp)
+                    modifier = Modifier.size(28.dp)
                 ) {
                     Icon(
-                        imageVector = if (isLoading) Icons.Default.Close else Icons.Default.Refresh,
+                        imageVector = Icons.Default.Refresh,
                         contentDescription = "Reload",
-                        tint = textColor,
-                        modifier = Modifier.size(18.dp)
+                        tint = Color(0xFF388AF6),
+                        modifier = Modifier.size(20.dp)
                     )
                 }
             }
 
-            // Address Bar
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .height(32.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(cardBg)
-                    .clickable { isAddressBarFocused = true }
-                    .padding(horizontal = 12.dp),
-                contentAlignment = Alignment.CenterStart
-            ) {
-                BasicTextField(
-                    value = inputUrl,
-                    onValueChange = { 
-                        inputUrl = it
-                        onUrlChange(it)
-                    },
-                    textStyle = TextStyle(color = textColor, fontSize = 12.sp),
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-                    keyboardActions = KeyboardActions(onGo = { navigate() }),
-                    modifier = Modifier.fillMaxWidth().onFocusChanged { if(it.isFocused) isAddressBarFocused = true },
-                    cursorBrush = SolidColor(accentColor)
-                )
-                
-                if (inputUrl.isEmpty()) {
-                    Text("Search or enter URL", fontSize = 11.sp, color = textColor.copy(alpha = 0.4f))
-                }
-            }
-            
-            IconButton(
-                onClick = { navigate() },
-                modifier = Modifier.size(24.dp)
-            ) {
-                Icon(Icons.Default.Search, contentDescription = "Go", tint = accentColor, modifier = Modifier.size(18.dp))
-            }
-
+            // Close (✕) button to easily dismiss the browser
             IconButton(
                 onClick = onClose,
-                modifier = Modifier.size(24.dp)
+                modifier = Modifier.size(28.dp)
             ) {
                 Icon(
                     imageVector = Icons.Default.Close,
                     contentDescription = "Close",
-                    tint = textColor.copy(alpha = 0.6f),
-                    modifier = Modifier.size(18.dp)
+                    tint = Color(0xFFEF4444),
+                    modifier = Modifier.size(20.dp)
                 )
             }
         }

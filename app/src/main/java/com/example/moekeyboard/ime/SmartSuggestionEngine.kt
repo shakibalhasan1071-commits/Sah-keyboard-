@@ -22,6 +22,7 @@ object SmartSuggestionEngine {
     private val userFreqMap = java.util.concurrent.ConcurrentHashMap<String, Int>()
     // Transitions map: key = prevWord.lowercase(), value = mapOf(nextWord to frequency)
     private val userTransitionsMap = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.ConcurrentHashMap<String, Int>>()
+    private val backgroundExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
 
     fun init(context: Context) {
         if (prefs == null) {
@@ -473,7 +474,11 @@ object SmartSuggestionEngine {
             val map = userTransitionsMap.getOrPut(prev) { java.util.concurrent.ConcurrentHashMap() }
             val count = (map[next] ?: 0) + boost
             map[next] = count
-            transPrefs?.edit()?.putInt("$prev|||$next", count)?.apply()
+            backgroundExecutor.execute {
+                try {
+                    transPrefs?.edit()?.putInt("$prev|||$next", count)?.apply()
+                } catch (_: Exception) {}
+            }
         }
     }
 
@@ -487,14 +492,24 @@ object SmartSuggestionEngine {
         if (trimmed.length in 1..60) {
             val count = (userFreqMap[trimmed] ?: 0) + boost
             userFreqMap[trimmed] = count
-            prefs?.edit()?.putInt(trimmed, count)?.apply()
 
             // Also keep lowercase entry updated for case-insensitive lookup
             val lower = trimmed.lowercase()
-            if (lower != trimmed) {
-                val lowerCount = (userFreqMap[lower] ?: 0) + boost
-                userFreqMap[lower] = lowerCount
-                prefs?.edit()?.putInt(lower, lowerCount)?.apply()
+            val lowerCount = if (lower != trimmed) {
+                val c = (userFreqMap[lower] ?: 0) + boost
+                userFreqMap[lower] = c
+                c
+            } else null
+
+            backgroundExecutor.execute {
+                try {
+                    val editor = prefs?.edit()
+                    editor?.putInt(trimmed, count)
+                    if (lowerCount != null) {
+                        editor?.putInt(lower, lowerCount)
+                    }
+                    editor?.apply()
+                } catch (_: Exception) {}
             }
         }
     }
