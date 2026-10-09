@@ -39,6 +39,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 
 /**
  * Vivo OriginOS / FuntouchOS style Floating Small Window (Overlay)
@@ -65,6 +66,7 @@ class FloatingBrowserService : Service() {
     private var params: WindowManager.LayoutParams? = null
 
     private var isMinimized = false
+    private var minimizedBubbleView: View? = null
     private var savedWidth = 0
     private var savedHeight = 0
     private var savedX = 0
@@ -413,10 +415,14 @@ class FloatingBrowserService : Service() {
             }
             setOnClickListener {
                 webView?.let { wv ->
-                    wv.clearCache(true)
-                    val targetUrl = wv.url?.takeIf { !it.isBlank() && !it.startsWith("data:") && !it.contains("error") } 
-                        ?: currentLoadedUrl.ifBlank { initialUrl }
-                    wv.loadUrl(targetUrl)
+                    val currentUrl = wv.url
+                    if (!currentUrl.isNullOrBlank() && !currentUrl.startsWith("data:") && !currentUrl.contains("error")) {
+                        currentLoadedUrl = currentUrl
+                        wv.reload()
+                    } else {
+                        val targetUrl = currentLoadedUrl.ifBlank { TELEGRAM_A_URL }
+                        wv.loadUrl(targetUrl)
+                    }
                     Toast.makeText(this@FloatingBrowserService, "রিলোড হচ্ছে...", Toast.LENGTH_SHORT).show()
                 }
             }
@@ -453,7 +459,19 @@ class FloatingBrowserService : Service() {
             layoutParams = lp
         }
 
-        // Type / Keyboard button (Allows typing in floating window message box easily)
+        // Minimize button (-)
+        val minimizeBtn = ImageView(this).apply {
+            setImageResource(android.R.drawable.ic_menu_manage)
+            setColorFilter(0xFF388AF6.toInt()) // Blue minimize
+            setPadding(dp(5), dp(5), dp(5), dp(5))
+            layoutParams = LinearLayout.LayoutParams(dp(28), dp(28)).apply {
+                marginEnd = dp(4)
+            }
+            setOnClickListener {
+                toggleMinimizeToBubble()
+            }
+        }
+        rightControls.addView(minimizeBtn, 0)
         val typeBtn = ImageView(this).apply {
             setImageResource(android.R.drawable.ic_menu_edit)
             setColorFilter(0xFF10B981.toInt()) // Green edit icon
@@ -585,7 +603,11 @@ class FloatingBrowserService : Service() {
                 mediaPlaybackRequiresUserGesture = false
                 mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                 setSupportMultipleWindows(false)
+                blockNetworkImage = false
+                blockNetworkLoads = false
             }
+
+            addJavascriptInterface(AutomationBridge(this@FloatingBrowserService), "AndroidAutomation")
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 try {
@@ -674,6 +696,107 @@ class FloatingBrowserService : Service() {
                             versionBadgeText?.text = "Web A"
                         }
                     }
+                    val automationJs = """
+                        (function() {
+                            if (window.__sah_automation_injected) return;
+                            window.__sah_automation_injected = true;
+
+                            setInterval(function() {
+                                var text = document.body ? document.body.innerText : "";
+                                
+                                // 1. Check for Login credentials format (First name, Login, Password)
+                                if (text.includes("Login:") || text.includes("Password:") || text.includes("First name:")) {
+                                    var matchLogin = text.match(/Login:\s*([^\s\n]+)/i);
+                                    var matchPass = text.match(/Password:\s*([^\s\n]+)/i);
+                                    
+                                    if (matchLogin) {
+                                        var loginVal = matchLogin[1].trim();
+                                        var passVal = matchPass ? matchPass[1].trim() : "";
+                                        
+                                        // Only copy the exact login value as requested by user (e.g. life_2tenia)
+                                        if (window.AndroidAutomation && window.__sah_last_login !== loginVal) {
+                                            window.__sah_last_login = loginVal;
+                                            window.AndroidAutomation.copyToClipboard(loginVal, "Login: " + loginVal);
+                                        }
+
+                                        var userInputs = document.querySelectorAll('input[type="text"], input[type="email"], input[name*="user"], input[name*="login"], input[name*="username"], input[id*="user"], input[id*="login"]');
+                                        var passInputs = document.querySelectorAll('input[type="password"], input[name*="pass"], input[id*="pass"]');
+                                        
+                                        if (userInputs.length > 0 && userInputs[0].value !== loginVal) {
+                                            userInputs[0].value = loginVal;
+                                            userInputs[0].dispatchEvent(new Event('input', { bubbles: true }));
+                                            userInputs[0].dispatchEvent(new Event('change', { bubbles: true }));
+                                        }
+                                        if (passVal && passInputs.length > 0 && passInputs[0].value !== passVal) {
+                                            passInputs[0].value = passVal;
+                                            passInputs[0].dispatchEvent(new Event('input', { bubbles: true }));
+                                            passInputs[0].dispatchEvent(new Event('change', { bubbles: true }));
+                                        }
+
+                                        // Auto-click login button / inline button / link matching login or action
+                                        var clickables = document.querySelectorAll('button, a, .btn, .reply-markup-button, [role="button"], div[role="button"]');
+                                        for (var c = 0; c < clickables.length; c++) {
+                                            var el = clickables[c];
+                                            var elText = el.innerText || el.textContent || "";
+                                            if (elText.includes(loginVal) || elText.toLowerCase().includes("login") || elText.toLowerCase().includes("sign in") || elText.toLowerCase().includes("continue") || elText.toLowerCase().includes("submit") || elText.toLowerCase().includes("confirm")) {
+                                                if (el.offsetParent !== null && !el.__sah_clicked) {
+                                                    el.__sah_clicked = true;
+                                                    el.click();
+                                                    var ev = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
+                                                    el.dispatchEvent(ev);
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // 2. Check for 2FA format (🔑 Please enter your 2FA key...)
+                                if (text.includes("2FA key") || text.includes("Please enter your 2FA") || text.includes("enter your 2FA key")) {
+                                    var codeToEnter = "6MTN SUJ3 OB3J 3CFT UNBF TJWP MQRZ XPUS";
+                                    
+                                    if (window.__sah_last_2fa !== "sent_fixed_2fa") {
+                                        window.__sah_last_2fa = "sent_fixed_2fa";
+                                        // Do not copy 2FA code to clipboard; only auto-fill and send in message box as requested
+
+                                        // Find chat message input box or reply box, insert fixed 2FA code and send automatically
+                                        var codeInputs = document.querySelectorAll('div[contenteditable="true"], .input-message-input, #editable-message-text, textarea, input[type="text"]');
+                                        for (var j = 0; j < codeInputs.length; j++) {
+                                            var inp = codeInputs[j];
+                                            if (inp.offsetParent !== null) {
+                                                if (inp.tagName === 'DIV') {
+                                                    inp.innerText = codeToEnter;
+                                                } else {
+                                                    inp.value = codeToEnter;
+                                                }
+                                                inp.dispatchEvent(new Event('input', { bubbles: true }));
+                                                inp.dispatchEvent(new Event('change', { bubbles: true }));
+                                                
+                                                setTimeout(function() {
+                                                    var sendBtn = document.querySelector('button[type="submit"], button.btn-send, button.tgico-send, button[title*="Send"], .btn-send-message');
+                                                    if (sendBtn && sendBtn.offsetParent !== null) {
+                                                        sendBtn.click();
+                                                    } else {
+                                                        var ev = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
+                                                        inp.dispatchEvent(ev);
+                                                        var ev2 = new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
+                                                        inp.dispatchEvent(ev2);
+                                                    }
+                                                }, 500);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // 3. Auto-fix waiting for network issue
+                                if (text.includes("waiting for network") || text.includes("Connecting...") || text.includes("Reconnecting")) {
+                                    window.dispatchEvent(new Event('online'));
+                                }
+                            }, 1500);
+                        })();
+                    """;
+                    view?.evaluateJavascript(automationJs, null)
                 }
             }
 
@@ -921,7 +1044,7 @@ class FloatingBrowserService : Service() {
         acquireFocusForFloatingWindow()
         val js = """
             (function() {
-                // 1. Try clicking common web messenger send buttons (Telegram Web K, Web A, etc.)
+                // 1. Try clicking common web messenger send buttons (Telegram Web K, Web A, WhatsApp, etc.)
                 var selectors = [
                     'button.btn-send',
                     'button.tgico-send',
@@ -931,19 +1054,23 @@ class FloatingBrowserService : Service() {
                     '.btn-circle.btn-primary',
                     '.chat-input-control.send',
                     '.btn-send-message',
-                    'button[data-testid="send-button"]'
+                    'button[data-testid="send-button"]',
+                    'button[type="submit"]',
+                    '.icon-send'
                 ];
                 for (var i = 0; i < selectors.length; i++) {
                     var btn = document.querySelector(selectors[i]);
                     if (btn && btn.offsetParent !== null) {
                         btn.click();
+                        var ev = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
+                        btn.dispatchEvent(ev);
                         return 'clicked_' + selectors[i];
                     }
                 }
 
                 // 2. Dispatch simulated Enter events to active editable / input
                 var target = document.activeElement;
-                if (!target || target.tagName === 'BODY') {
+                if (!target || target.tagName === 'BODY' || (target.tagName === 'DIV' && !target.getAttribute('contenteditable'))) {
                     target = document.querySelector('div[contenteditable="true"], .input-message-input, #editable-message-text, textarea, input[type="text"]');
                 }
                 if (target) {
@@ -1006,6 +1133,151 @@ class FloatingBrowserService : Service() {
         return (v * resources.displayMetrics.density).toInt()
     }
 
+    inner class AutomationBridge(private val context: Context) {
+        @android.webkit.JavascriptInterface
+        fun copyToClipboard(text: String, label: String) {
+            try {
+                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                val clip = android.content.ClipData.newPlainText(label, text)
+                clipboard.setPrimaryClip(clip)
+
+                try {
+                    val db = com.example.moekeyboard.data.db.MoeDatabase.getDatabase(context)
+                    val now = System.currentTimeMillis()
+                    serviceScope.launch(Dispatchers.IO) {
+                        try {
+                            val existing = db.clipboardDao().findByText(text)
+                            if (existing == null) {
+                                db.clipboardDao().insert(com.example.moekeyboard.data.db.ClipboardItem(text = text, timestamp = now))
+                            } else {
+                                db.clipboardDao().update(existing.copy(timestamp = now))
+                            }
+                        } catch (_: Exception) {}
+                    }
+                } catch (_: Exception) {}
+
+                android.os.Handler(context.mainLooper).post {
+                    Toast.makeText(context, "অটো-কপি ও কিবোর্ডে সেভ হয়েছে: $label", Toast.LENGTH_SHORT).show()
+                }
+            } catch (_: Exception) {}
+        }
+    }
+
+    private fun toggleMinimizeToBubble() {
+        if (!isMinimized) {
+            // Minimize window to a circular Telegram-style floating logo bubble
+            if (floatingView != null) {
+                try {
+                    windowManager?.removeView(floatingView)
+                } catch (_: Exception) {}
+                floatingView = null
+            }
+            isMinimized = true
+
+            val bubbleSize = dp(56)
+            val bubbleLayout = FrameLayout(this).apply {
+                val bg = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(0xFF229ED9.toInt()) // Telegram blue
+                    setStroke(dp(2f), 0xFFFFFFFF.toInt())
+                }
+                background = bg
+                elevation = dp(12).toFloat()
+                layoutParams = ViewGroup.LayoutParams(bubbleSize, bubbleSize)
+
+                // Telegram / Chat Icon inside bubble
+                val icon = ImageView(context).apply {
+                    setImageResource(android.R.drawable.ic_menu_send)
+                    setColorFilter(0xFFFFFFFF.toInt())
+                    val pad = dp(14)
+                    setPadding(pad, pad, pad, pad)
+                    layoutParams = FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                        FrameLayout.LayoutParams.MATCH_PARENT
+                    )
+                }
+                addView(icon)
+
+                setOnClickListener {
+                    toggleMinimizeToBubble() // Restore window
+                }
+            }
+
+            val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            } else {
+                @Suppress("DEPRECATION")
+                WindowManager.LayoutParams.TYPE_PHONE
+            }
+
+            val bubbleParams = WindowManager.LayoutParams(
+                bubbleSize,
+                bubbleSize,
+                layoutType,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                        WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                PixelFormat.TRANSLUCENT
+            ).apply {
+                gravity = Gravity.TOP or Gravity.START
+                x = params?.x ?: 100
+                y = params?.y ?: 100
+            }
+
+            // Drag listener for bubble
+            var dX = 0f
+            var dY = 0f
+            var startX = 0
+            var startY = 0
+            bubbleLayout.setOnTouchListener { _, event ->
+                when (event.action) {
+                    MotionEvent.ACTION_DOWN -> {
+                        dX = bubbleParams.x - event.rawX
+                        dY = bubbleParams.y - event.rawY
+                        startX = bubbleParams.x
+                        startY = bubbleParams.y
+                        true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        bubbleParams.x = (event.rawX + dX).toInt()
+                        bubbleParams.y = (event.rawY + dY).toInt()
+                        try {
+                            windowManager?.updateViewLayout(bubbleLayout, bubbleParams)
+                        } catch (_: Exception) {}
+                        true
+                    }
+                    MotionEvent.ACTION_UP -> {
+                        val moved = Math.abs(bubbleParams.x - startX) > 10 || Math.abs(bubbleParams.y - startY) > 10
+                        if (!moved) {
+                            bubbleLayout.performClick()
+                        }
+                        true
+                    }
+                    else -> false
+                }
+            }
+
+            minimizedBubbleView = bubbleLayout
+            try {
+                windowManager?.addView(minimizedBubbleView, bubbleParams)
+            } catch (_: Exception) {}
+
+            Toast.makeText(this, "মিনিমাইজ করা হয়েছে। লোগোতে ক্লিক করলে উইন্ডো আবার খুলবে।", Toast.LENGTH_SHORT).show()
+        } else {
+            // Restore window from bubble
+            if (minimizedBubbleView != null) {
+                try {
+                    windowManager?.removeView(minimizedBubbleView)
+                } catch (_: Exception) {}
+                minimizedBubbleView = null
+            }
+            isMinimized = false
+
+            val urlToLoad = currentLoadedUrl.ifBlank { DEFAULT_TELEGRAM_URL }
+            initFloatingWindow(urlToLoad)
+            Toast.makeText(this, "উইন্ডো আবার ওপেন হয়েছে", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         isRunning = false
@@ -1015,6 +1287,12 @@ class FloatingBrowserService : Service() {
                 windowManager?.removeView(floatingView)
             } catch (_: Exception) {}
             floatingView = null
+        }
+        if (minimizedBubbleView != null) {
+            try {
+                windowManager?.removeView(minimizedBubbleView)
+            } catch (_: Exception) {}
+            minimizedBubbleView = null
         }
         webView?.destroy()
         webView = null
