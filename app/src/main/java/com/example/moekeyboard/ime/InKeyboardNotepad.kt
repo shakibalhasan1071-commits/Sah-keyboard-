@@ -12,6 +12,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Input
+import androidx.compose.material.icons.automirrored.filled.NoteAdd
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -303,7 +305,7 @@ fun InKeyboardNotepad(
                             },
                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                         ) {
-                            Icon(Icons.Default.Input, contentDescription = "Insert", modifier = Modifier.size(16.dp), tint = accentColor)
+                            Icon(Icons.AutoMirrored.Filled.Input, contentDescription = "Insert", modifier = Modifier.size(16.dp), tint = accentColor)
                             Spacer(modifier = Modifier.width(4.dp))
                             Text("পেস্ট", color = accentColor, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         }
@@ -404,7 +406,7 @@ fun InKeyboardNotepad(
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Icon(
-                            imageVector = Icons.Default.NoteAdd,
+                            imageVector = Icons.AutoMirrored.Filled.NoteAdd,
                             contentDescription = "No Notes",
                             tint = accentColor.copy(alpha = 0.7f),
                             modifier = Modifier.size(44.dp)

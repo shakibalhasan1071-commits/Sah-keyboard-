@@ -233,7 +233,7 @@ fun InKeyboardCustomizer(
                             )
                         }
 
-                        Divider(color = textColor.copy(alpha = 0.1f))
+                        HorizontalDivider(color = textColor.copy(alpha = 0.1f))
 
                         // Sound Toggle
                         Row(
@@ -252,7 +252,7 @@ fun InKeyboardCustomizer(
                             )
                         }
 
-                        Divider(color = textColor.copy(alpha = 0.1f))
+                        HorizontalDivider(color = textColor.copy(alpha = 0.1f))
 
                         // Number row Toggle
                         Row(

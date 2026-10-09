@@ -10,6 +10,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Input
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -150,7 +151,7 @@ fun InKeyboardEmailSheet(
                                     onInsertText(acc.email)
                                     Toast.makeText(context, "ইমেল বসানো হয়েছে", Toast.LENGTH_SHORT).show()
                                 }, modifier = Modifier.size(26.dp)) {
-                                    Icon(Icons.Default.Input, "Insert", tint = accentGreen, modifier = Modifier.size(16.dp))
+                                    Icon(Icons.AutoMirrored.Filled.Input, "Insert", tint = accentGreen, modifier = Modifier.size(16.dp))
                                 }
                                 IconButton(onClick = { handleDeleteSheetItem(acc.email) }, modifier = Modifier.size(26.dp)) {
                                     Icon(Icons.Default.DeleteOutline, "Delete", tint = Color(0xFFEF5350), modifier = Modifier.size(16.dp))

@@ -408,7 +408,6 @@ object TempMailWebBridge {
             setBackgroundColor(android.graphics.Color.parseColor("#0D0E12"))
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
-            settings.databaseEnabled = true
             settings.setSupportZoom(true)
             settings.builtInZoomControls = true
             settings.displayZoomControls = false

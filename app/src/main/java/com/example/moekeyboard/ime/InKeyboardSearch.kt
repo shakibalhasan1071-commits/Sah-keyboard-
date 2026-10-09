@@ -10,6 +10,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -123,7 +124,7 @@ fun InKeyboardSearch(
                 title = "উইকিপিডিয়া আর্টিকেল",
                 subtitle = "Wikipedia Knowledge Search",
                 url = "https://bn.wikipedia.org/wiki/Special:Search?search=$encodedQuery",
-                icon = Icons.Default.MenuBook,
+                icon = Icons.AutoMirrored.Filled.MenuBook,
                 color = Color(0xFF757575)
             ),
             SearchShareOption(

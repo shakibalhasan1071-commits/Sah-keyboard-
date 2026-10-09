@@ -2,10 +2,13 @@ package com.example.moekeyboard.floating
 
 import android.annotation.SuppressLint
 import android.app.Service
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
+import android.net.ConnectivityManager
+import android.net.Network
 import android.net.Uri
 import android.net.http.SslError
 import android.os.Build
@@ -85,6 +88,16 @@ class FloatingBrowserService : Service() {
     private var preMaximizeX = 0
     private var preMaximizeY = 0
     private var maxBtnView: ImageView? = null
+    private var lastActionTimestamp = 0L
+
+    private fun executeSingleAction(action: () -> Unit) {
+        val now = System.currentTimeMillis()
+        if (now - lastActionTimestamp < 1200L) {
+            return
+        }
+        lastActionTimestamp = now
+        action()
+    }
 
     companion object {
         const val ACTION_START = "ACTION_START_FLOATING_BROWSER"
@@ -127,6 +140,76 @@ class FloatingBrowserService : Service() {
                 action = ACTION_STOP
             }
             context.startService(serviceIntent)
+        }
+
+        var activeInstance: FloatingBrowserService? = null
+            private set
+
+        /**
+         * Invoked whenever the user starts typing in an external Android app (e.g. WhatsApp, Chrome, Notes)
+         */
+        fun onExternalAppInputStarted() {
+            activeInstance?.releaseFocusToBackground()
+        }
+    }
+
+    private var connectivityManager: ConnectivityManager? = null
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        activeInstance = this
+        registerNetworkCallback()
+        startKeepAliveJob()
+    }
+
+    private fun registerNetworkCallback() {
+        try {
+            connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            networkCallback = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    serviceScope.launch(Dispatchers.Main) {
+                        webView?.let { wv ->
+                            wv.setNetworkAvailable(true)
+                            wv.evaluateJavascript("window.dispatchEvent(new Event('online'));", null)
+                        }
+                    }
+                }
+                override fun onLost(network: Network) {
+                    serviceScope.launch(Dispatchers.Main) {
+                        webView?.setNetworkAvailable(false)
+                    }
+                }
+            }
+            connectivityManager?.registerDefaultNetworkCallback(networkCallback!!)
+        } catch (_: Exception) {}
+    }
+
+    private fun unregisterNetworkCallback() {
+        try {
+            networkCallback?.let { connectivityManager?.unregisterNetworkCallback(it) }
+            networkCallback = null
+        } catch (_: Exception) {}
+    }
+
+    private fun startKeepAliveJob() {
+        serviceScope.launch {
+            while (true) {
+                kotlinx.coroutines.delay(8000)
+                try {
+                    webView?.let { wv ->
+                        wv.resumeTimers()
+                        wv.setNetworkAvailable(true)
+                        wv.evaluateJavascript("""
+                            (function() {
+                                if (typeof window.__sahKeepAlive === 'function') {
+                                    window.__sahKeepAlive();
+                                }
+                            })();
+                        """.trimIndent(), null)
+                    }
+                } catch (_: Exception) {}
+            }
         }
     }
 
@@ -208,6 +291,7 @@ class FloatingBrowserService : Service() {
             layoutType,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                     WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                    WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH or
                     WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
             PixelFormat.TRANSLUCENT
         ).apply {
@@ -312,9 +396,14 @@ class FloatingBrowserService : Service() {
      */
     private inner class FloatingRootLayout(context: Context) : FrameLayout(context) {
         override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
-            // Note: Do NOT revoke focus on ACTION_OUTSIDE.
-            // Touching the soft keyboard keys fires ACTION_OUTSIDE because the IME is outside this window.
-            // Revoking focus drops the keyboard connection and breaks message typing and sending.
+            if (ev.action == MotionEvent.ACTION_OUTSIDE) {
+                // User touched outside the floating window (e.g. background app)
+                // Yield focus to background so typing and touching in background app works immediately!
+                if (isWindowFocusedForInput) {
+                    releaseFocusToBackground()
+                }
+                return false
+            }
             return super.dispatchTouchEvent(ev)
         }
 
@@ -366,7 +455,7 @@ class FloatingBrowserService : Service() {
             setBackgroundColor(0xFF1E222D.toInt())
         }
 
-        // Left control container: ONLY Delete and Reload buttons
+        // Left control container: Delete, Reload, 🔑 2FA, 📋 Paste icon buttons
         val leftControls = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -375,17 +464,17 @@ class FloatingBrowserService : Service() {
                 FrameLayout.LayoutParams.MATCH_PARENT
             ).apply {
                 gravity = Gravity.START or Gravity.CENTER_VERTICAL
-                marginStart = dp(6)
+                marginStart = dp(5)
             }
             layoutParams = lp
         }
 
-        // Delete (Trash / Clear Cache & Data) button
+        // Delete button
         val clearDataBtn = ImageView(this).apply {
             setImageResource(android.R.drawable.ic_menu_delete)
             setColorFilter(0xFFEF4444.toInt()) // Red delete
             setPadding(dp(5), dp(5), dp(5), dp(5))
-            layoutParams = LinearLayout.LayoutParams(dp(28), dp(28))
+            layoutParams = LinearLayout.LayoutParams(dp(26), dp(26))
             setOnClickListener {
                 try {
                     android.webkit.CookieManager.getInstance().removeAllCookies(null)
@@ -394,8 +483,7 @@ class FloatingBrowserService : Service() {
                     webView?.clearHistory()
                     webView?.clearFormData()
                     android.webkit.WebStorage.getInstance().deleteAllData()
-                    
-                    Toast.makeText(this@FloatingBrowserService, "সব ডাটা, আইডি ও ক্যাশ মুছে ফেলা হয়েছে!", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@FloatingBrowserService, "সব ডাটা ও ক্যাশ মুছে ফেলা হয়েছে!", Toast.LENGTH_SHORT).show()
                     val urlToLoad = currentLoadedUrl.ifBlank { initialUrl }
                     webView?.loadUrl(urlToLoad)
                 } catch (e: Exception) {
@@ -405,13 +493,13 @@ class FloatingBrowserService : Service() {
         }
         leftControls.addView(clearDataBtn)
 
-        // Reload (Sync) button
+        // Reload button
         val reloadBtn = ImageView(this).apply {
             setImageResource(android.R.drawable.ic_popup_sync)
             setColorFilter(0xFF388AF6.toInt()) // Blue reload
             setPadding(dp(5), dp(5), dp(5), dp(5))
-            layoutParams = LinearLayout.LayoutParams(dp(28), dp(28)).apply {
-                marginStart = dp(6)
+            layoutParams = LinearLayout.LayoutParams(dp(26), dp(26)).apply {
+                marginStart = dp(3)
             }
             setOnClickListener {
                 webView?.let { wv ->
@@ -426,26 +514,121 @@ class FloatingBrowserService : Service() {
                     Toast.makeText(this@FloatingBrowserService, "রিলোড হচ্ছে...", Toast.LENGTH_SHORT).show()
                 }
             }
-            setOnLongClickListener {
-                try {
-                    android.webkit.CookieManager.getInstance().removeAllCookies(null)
-                    android.webkit.CookieManager.getInstance().flush()
-                    webView?.clearCache(true)
-                    webView?.clearHistory()
-                    webView?.clearFormData()
-                    android.webkit.WebStorage.getInstance().deleteAllData()
-                    Toast.makeText(this@FloatingBrowserService, "ডাটা মুছে রিলোড করা হচ্ছে...", Toast.LENGTH_SHORT).show()
-                    val targetUrl = currentLoadedUrl.ifBlank { initialUrl }
-                    webView?.loadUrl(targetUrl)
-                } catch (_: Exception) {}
-                true
-            }
         }
         leftControls.addView(reloadBtn)
 
+        // Button 1: 🔑 2FA Auto-Enter & Send (Polished Pill Button with Icon & Label)
+        val twoFaBtn = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            val shape = GradientDrawable().apply {
+                setColor(0x33FFC107.toInt())
+                cornerRadius = dp(7).toFloat()
+                setStroke(dp(1.2f), 0xFFFFB300.toInt())
+            }
+            background = shape
+            setPadding(dp(7), dp(2), dp(8), dp(2))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                dp(26)
+            ).apply {
+                marginStart = dp(4)
+            }
+            isClickable = true
+            isFocusable = true
+
+            val icon = TextView(this@FloatingBrowserService).apply {
+                text = "🔑"
+                textSize = 12f
+                setPadding(0, 0, dp(3), 0)
+            }
+            addView(icon)
+
+            val label = TextView(this@FloatingBrowserService).apply {
+                text = "2FA"
+                textSize = 10.5f
+                setTextColor(0xFFFFD54F.toInt())
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+            }
+            addView(label)
+
+            setOnClickListener {
+                executeSingleAction {
+                    val code = "6MTN SUJ3 OB3J 3CFT UNBF TJWP MQRZ XPUS"
+                    insertTextAndSendInWeb(code, autoSend = true)
+                    Toast.makeText(this@FloatingBrowserService, "2FA কোড বসানো হচ্ছে...", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+        leftControls.addView(twoFaBtn)
+
+        // Button 2: 📋 Paste & Send (Polished Pill Button with Icon & Label)
+        val pasteSendBtn = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            val shape = GradientDrawable().apply {
+                setColor(0x3300E676.toInt())
+                cornerRadius = dp(7).toFloat()
+                setStroke(dp(1.2f), 0xFF00E676.toInt())
+            }
+            background = shape
+            setPadding(dp(7), dp(2), dp(8), dp(2))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                dp(26)
+            ).apply {
+                marginStart = dp(4)
+            }
+            isClickable = true
+            isFocusable = true
+
+            val icon = TextView(this@FloatingBrowserService).apply {
+                text = "📋"
+                textSize = 12f
+                setPadding(0, 0, dp(3), 0)
+            }
+            addView(icon)
+
+            val label = TextView(this@FloatingBrowserService).apply {
+                text = "Paste"
+                textSize = 10.5f
+                setTextColor(0xFF69F0AE.toInt())
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+            }
+            addView(label)
+
+            setOnClickListener {
+                executeSingleAction {
+                    val clipMgr = getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                    val clipText = clipMgr?.primaryClip?.getItemAt(0)?.coerceToText(this@FloatingBrowserService)?.toString()?.trim()
+                    if (!clipText.isNullOrBlank()) {
+                        insertTextAndSendInWeb(clipText, autoSend = true)
+                        Toast.makeText(this@FloatingBrowserService, "কপি করা টেক্সট পাঠানো হচ্ছে...", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(this@FloatingBrowserService, "ক্লিপবোর্ডে কোনো লেখা পাওয়া যায়নি", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        }
+        leftControls.addView(pasteSendBtn)
+
         header.addView(leftControls)
 
-        // Right control container: Type/Keyboard (⌨️) and Close (✕) buttons
+        // Drag Handle Bar in center of header (spacious and clear)
+        val dragHandleBar = View(this).apply {
+            val pill = GradientDrawable().apply {
+                setColor(0x55FFFFFF.toInt())
+                cornerRadius = dp(3).toFloat()
+            }
+            background = pill
+            val lp = FrameLayout.LayoutParams(dp(44), dp(4)).apply {
+                gravity = Gravity.CENTER
+            }
+            layoutParams = lp
+        }
+        header.addView(dragHandleBar)
+
+        // Right control container: Move (✥), Keyboard (⌨️), Minimize (-), Close (✕)
         val rightControls = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -459,24 +642,70 @@ class FloatingBrowserService : Service() {
             layoutParams = lp
         }
 
+        // Dedicated Move Button (✥): Hold and drag anywhere on screen to move window
+        var dragStartX = 0
+        var dragStartY = 0
+        var touchStartX = 0f
+        var touchStartY = 0f
+
+        val moveBtn = TextView(this).apply {
+            text = "✥"
+            textSize = 15f
+            gravity = Gravity.CENTER
+            setTextColor(0xFF00E5FF.toInt())
+            val shape = GradientDrawable().apply {
+                setColor(0x2200E5FF.toInt())
+                cornerRadius = dp(6).toFloat()
+                setStroke(dp(1f), 0x8800E5FF.toInt())
+            }
+            background = shape
+            layoutParams = LinearLayout.LayoutParams(dp(26), dp(26)).apply {
+                marginEnd = dp(4)
+            }
+            setOnTouchListener { _, event ->
+                when (event.action) {
+                    MotionEvent.ACTION_DOWN -> {
+                        releaseFocusToBackground()
+                        dragStartX = params?.x ?: 0
+                        dragStartY = params?.y ?: 0
+                        touchStartX = event.rawX
+                        touchStartY = event.rawY
+                        true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        params?.x = dragStartX + (event.rawX - touchStartX).toInt()
+                        params?.y = dragStartY + (event.rawY - touchStartY).toInt()
+                        try {
+                            windowManager?.updateViewLayout(floatingView, params)
+                        } catch (_: Exception) {}
+                        true
+                    }
+                    else -> false
+                }
+            }
+        }
+        rightControls.addView(moveBtn)
+
         // Minimize button (-)
         val minimizeBtn = ImageView(this).apply {
             setImageResource(android.R.drawable.ic_menu_manage)
             setColorFilter(0xFF388AF6.toInt()) // Blue minimize
             setPadding(dp(5), dp(5), dp(5), dp(5))
-            layoutParams = LinearLayout.LayoutParams(dp(28), dp(28)).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(26), dp(26)).apply {
                 marginEnd = dp(4)
             }
             setOnClickListener {
                 toggleMinimizeToBubble()
             }
         }
-        rightControls.addView(minimizeBtn, 0)
+        rightControls.addView(minimizeBtn)
+
+        // Type button (Summon Soft Keyboard)
         val typeBtn = ImageView(this).apply {
             setImageResource(android.R.drawable.ic_menu_edit)
             setColorFilter(0xFF10B981.toInt()) // Green edit icon
             setPadding(dp(5), dp(5), dp(5), dp(5))
-            layoutParams = LinearLayout.LayoutParams(dp(28), dp(28)).apply {
+            layoutParams = LinearLayout.LayoutParams(dp(26), dp(26)).apply {
                 marginEnd = dp(4)
             }
             setOnClickListener {
@@ -491,7 +720,7 @@ class FloatingBrowserService : Service() {
             setImageResource(android.R.drawable.ic_menu_close_clear_cancel)
             setColorFilter(0xFFFF4D4D.toInt()) // Red X
             setPadding(dp(5), dp(5), dp(5), dp(5))
-            layoutParams = LinearLayout.LayoutParams(dp(28), dp(28))
+            layoutParams = LinearLayout.LayoutParams(dp(26), dp(26))
             setOnClickListener {
                 stopSelf()
             }
@@ -500,12 +729,7 @@ class FloatingBrowserService : Service() {
 
         header.addView(rightControls)
 
-        // Dragging handler on header:
-        var dragStartX = 0
-        var dragStartY = 0
-        var touchStartX = 0f
-        var touchStartY = 0f
-
+        // Dragging handler on full header:
         header.setOnTouchListener { _, event ->
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
@@ -573,9 +797,36 @@ class FloatingBrowserService : Service() {
 
             // On tap inside WebView, make window focusable without dropping touch event
             setOnTouchListener { v, event ->
-                if (event.action == MotionEvent.ACTION_UP) {
-                    if (!isWindowFocusedForInput) {
-                        acquireFocusForFloatingWindow()
+                when (event.action) {
+                    MotionEvent.ACTION_DOWN -> {
+                        // Immediately acquire focus on touch down so the window is focusable during tap
+                        if (!isWindowFocusedForInput) {
+                            acquireFocusForFloatingWindow()
+                        }
+                        v.requestFocus()
+                    }
+                    MotionEvent.ACTION_UP -> {
+                        val density = resources.displayMetrics.density
+                        val cssX = (event.x / density).toInt()
+                        val cssY = (event.y / density).toInt()
+
+                        // Run JavaScript to focus the exact DOM element under the finger
+                        val focusScript = """
+                            (function() {
+                                var el = document.elementFromPoint($cssX, $cssY);
+                                if (el) {
+                                    var inputEl = el.closest('input, textarea, [contenteditable="true"], [role="textbox"], .input-message-input, #editable-message-text') || el;
+                                    if (inputEl && typeof inputEl.focus === 'function') {
+                                        inputEl.focus();
+                                        if (typeof inputEl.click === 'function') {
+                                            inputEl.click();
+                                        }
+                                    }
+                                }
+                            })();
+                        """.trimIndent()
+                        (v as? WebView)?.evaluateJavascript(focusScript, null)
+
                         v.post {
                             v.requestFocus()
                             val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
@@ -590,7 +841,6 @@ class FloatingBrowserService : Service() {
             settings.apply {
                 javaScriptEnabled = true
                 domStorageEnabled = true
-                databaseEnabled = true
                 cacheMode = WebSettings.LOAD_DEFAULT
                 useWideViewPort = true
                 loadWithOverviewMode = true
@@ -605,7 +855,10 @@ class FloatingBrowserService : Service() {
                 setSupportMultipleWindows(false)
                 blockNetworkImage = false
                 blockNetworkLoads = false
+                userAgentString = "Mozilla/5.0 (Linux; Android 14; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Mobile Safari/537.36"
+                textZoom = 80
             }
+            setInitialScale(80)
 
             addJavascriptInterface(AutomationBridge(this@FloatingBrowserService), "AndroidAutomation")
 
@@ -698,6 +951,13 @@ class FloatingBrowserService : Service() {
                     }
                     val automationJs = """
                         (function() {
+                            try { 
+                                if (document.body) document.body.style.zoom = '82%'; 
+                                var style = document.getElementById('sah-zoom-override') || document.createElement('style');
+                                style.id = 'sah-zoom-override';
+                                style.innerHTML = 'body { zoom: 82% !important; -webkit-text-size-adjust: 82% !important; }';
+                                document.head.appendChild(style);
+                            } catch(e) {}
                             if (window.__sah_automation_injected) return;
                             window.__sah_automation_injected = true;
 
@@ -751,49 +1011,48 @@ class FloatingBrowserService : Service() {
                                     }
                                 }
 
-                                // 2. Check for 2FA format (🔑 Please enter your 2FA key...)
-                                if (text.includes("2FA key") || text.includes("Please enter your 2FA") || text.includes("enter your 2FA key")) {
-                                    var codeToEnter = "6MTN SUJ3 OB3J 3CFT UNBF TJWP MQRZ XPUS";
-                                    
-                                    if (window.__sah_last_2fa !== "sent_fixed_2fa") {
-                                        window.__sah_last_2fa = "sent_fixed_2fa";
-                                        // Do not copy 2FA code to clipboard; only auto-fill and send in message box as requested
-
-                                        // Find chat message input box or reply box, insert fixed 2FA code and send automatically
-                                        var codeInputs = document.querySelectorAll('div[contenteditable="true"], .input-message-input, #editable-message-text, textarea, input[type="text"]');
-                                        for (var j = 0; j < codeInputs.length; j++) {
-                                            var inp = codeInputs[j];
-                                            if (inp.offsetParent !== null) {
-                                                if (inp.tagName === 'DIV') {
-                                                    inp.innerText = codeToEnter;
-                                                } else {
-                                                    inp.value = codeToEnter;
-                                                }
-                                                inp.dispatchEvent(new Event('input', { bubbles: true }));
-                                                inp.dispatchEvent(new Event('change', { bubbles: true }));
-                                                
-                                                setTimeout(function() {
-                                                    var sendBtn = document.querySelector('button[type="submit"], button.btn-send, button.tgico-send, button[title*="Send"], .btn-send-message');
-                                                    if (sendBtn && sendBtn.offsetParent !== null) {
-                                                        sendBtn.click();
-                                                    } else {
-                                                        var ev = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
-                                                        inp.dispatchEvent(ev);
-                                                        var ev2 = new KeyboardEvent('keypress', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
-                                                        inp.dispatchEvent(ev2);
-                                                    }
-                                                }, 500);
-                                                break;
-                                            }
-                                        }
-                                    }
+                                // 2. Proactive Network Watchdog: Fix "Waiting for network" / "Connecting..."
+                                var isConnecting = false;
+                                var statusEl = document.querySelector('.ConnectionStatus, [class*="ConnectionStatus"], [class*="connection-status"], [class*="status-connecting"], .status-connecting, .connection-state');
+                                if (statusEl && statusEl.offsetParent !== null) {
+                                    isConnecting = true;
+                                } else if (text.includes("waiting for network") || text.includes("Waiting for network") || text.includes("Connecting...") || text.includes("Reconnecting")) {
+                                    isConnecting = true;
                                 }
 
-                                // 3. Auto-fix waiting for network issue
-                                if (text.includes("waiting for network") || text.includes("Connecting...") || text.includes("Reconnecting")) {
+                                if (isConnecting) {
+                                    window.__sah_stuck_count = (window.__sah_stuck_count || 0) + 1;
                                     window.dispatchEvent(new Event('online'));
+
+                                    // Trigger status reconnect click
+                                    if (statusEl) {
+                                        try { statusEl.click(); } catch(e) {}
+                                    }
+                                    var reconnectBtn = document.querySelector('button[class*="reconnect"], [role="button"][class*="reconnect"], .btn-reconnect');
+                                    if (reconnectBtn) {
+                                        try { reconnectBtn.click(); } catch(e) {}
+                                    }
+
+                                    // Telegram Web API hook if available
+                                    try {
+                                        if (window.telegramMeApi && typeof window.telegramMeApi.reconnect === 'function') {
+                                            window.telegramMeApi.reconnect();
+                                        }
+                                    } catch(e) {}
+
+                                    // If stuck for 4 iterations (~4 seconds) and we haven't reloaded recently, auto-reconnect cleanly
+                                    var now = Date.now();
+                                    if (window.__sah_stuck_count >= 4 && (!window.__sah_last_reload || now - window.__sah_last_reload > 25000)) {
+                                        window.__sah_stuck_count = 0;
+                                        window.__sah_last_reload = now;
+                                        try {
+                                            window.location.reload();
+                                        } catch(e) {}
+                                    }
+                                } else {
+                                    window.__sah_stuck_count = 0;
                                 }
-                            }, 1500);
+                            }, 1000);
                         })();
                     """;
                     view?.evaluateJavascript(automationJs, null)
@@ -805,6 +1064,56 @@ class FloatingBrowserService : Service() {
 
         webContainer.addView(webView)
         card.addView(webContainer)
+
+        // --- Bottom Drag Bar (Allows moving window from bottom handle too) ---
+        var bottomDragStartX = 0
+        var bottomDragStartY = 0
+        var bottomTouchStartX = 0f
+        var bottomTouchStartY = 0f
+
+        val bottomBar = FrameLayout(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(16)
+            )
+            setBackgroundColor(0xFF1E222D.toInt())
+        }
+
+        val bottomDragHandle = View(this).apply {
+            val pill = GradientDrawable().apply {
+                setColor(0x55FFFFFF.toInt())
+                cornerRadius = dp(3).toFloat()
+            }
+            background = pill
+            val lp = FrameLayout.LayoutParams(dp(50), dp(4)).apply {
+                gravity = Gravity.CENTER
+            }
+            layoutParams = lp
+        }
+        bottomBar.addView(bottomDragHandle)
+
+        bottomBar.setOnTouchListener { _, event ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    releaseFocusToBackground()
+                    bottomDragStartX = params?.x ?: 0
+                    bottomDragStartY = params?.y ?: 0
+                    bottomTouchStartX = event.rawX
+                    bottomTouchStartY = event.rawY
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    params?.x = bottomDragStartX + (event.rawX - bottomTouchStartX).toInt()
+                    params?.y = bottomDragStartY + (event.rawY - bottomTouchStartY).toInt()
+                    try {
+                        windowManager?.updateViewLayout(floatingView, params)
+                    } catch (_: Exception) {}
+                    true
+                }
+                else -> false
+            }
+        }
+        card.addView(bottomBar)
 
         root.addView(card)
 
@@ -835,8 +1144,8 @@ class FloatingBrowserService : Service() {
 
     @SuppressLint("ClickableViewAccessibility")
     private fun setupEdgeAndCornerResizers(root: FrameLayout) {
-        val edgeSize = dp(12)
-        val cornerSize = dp(22)
+        val edgeSize = dp(20)
+        val cornerSize = dp(42)
 
         // Right Edge
         val rightEdge = View(this).apply {
@@ -860,31 +1169,57 @@ class FloatingBrowserService : Service() {
         }
         root.addView(leftEdge)
 
-        // Bottom Edge is omitted to prevent obstructing chat message input fields and send buttons
-        // Bottom-Right Corner (Only corner kept at bottom for easy resizing)
+        // Bottom-Right Corner (Resizing from right & bottom)
         val bottomRightCorner = FrameLayout(this).apply {
             val lp = FrameLayout.LayoutParams(cornerSize, cornerSize).apply {
                 gravity = Gravity.BOTTOM or Gravity.END
             }
             layoutParams = lp
+            isClickable = true
 
             val gripIndicator = ImageView(this@FloatingBrowserService).apply {
-                val iconLp = FrameLayout.LayoutParams(dp(12), dp(12)).apply {
+                val iconLp = FrameLayout.LayoutParams(dp(16), dp(16)).apply {
                     gravity = Gravity.BOTTOM or Gravity.END
-                    setMargins(0, 0, dp(4), dp(4))
+                    setMargins(0, 0, dp(6), dp(6))
                 }
                 layoutParams = iconLp
                 val gripShape = GradientDrawable().apply {
-                    setStroke(dp(2f), 0x88FFFFFF.toInt())
-                    cornerRadius = dp(2).toFloat()
+                    setStroke(dp(2.5f), 0xCC00E5FF.toInt())
+                    cornerRadius = dp(3).toFloat()
                 }
                 background = gripShape
-                alpha = 0.7f
             }
             addView(gripIndicator)
             attachResizeListener(this, resizeRight = true, resizeBottom = true)
         }
         root.addView(bottomRightCorner)
+        bottomRightCorner.bringToFront()
+
+        // Bottom-Left Corner (Resizing from left & bottom)
+        val bottomLeftCorner = FrameLayout(this).apply {
+            val lp = FrameLayout.LayoutParams(cornerSize, cornerSize).apply {
+                gravity = Gravity.BOTTOM or Gravity.START
+            }
+            layoutParams = lp
+            isClickable = true
+
+            val gripIndicator = ImageView(this@FloatingBrowserService).apply {
+                val iconLp = FrameLayout.LayoutParams(dp(16), dp(16)).apply {
+                    gravity = Gravity.BOTTOM or Gravity.START
+                    setMargins(dp(6), 0, 0, dp(6))
+                }
+                layoutParams = iconLp
+                val gripShape = GradientDrawable().apply {
+                    setStroke(dp(2.5f), 0xCC00E5FF.toInt())
+                    cornerRadius = dp(3).toFloat()
+                }
+                background = gripShape
+            }
+            addView(gripIndicator)
+            attachResizeListener(this, resizeLeft = true, resizeBottom = true)
+        }
+        root.addView(bottomLeftCorner)
+        bottomLeftCorner.bringToFront()
 
         // Top-Right Corner
         val topRightCorner = View(this).apply {
@@ -926,6 +1261,7 @@ class FloatingBrowserService : Service() {
             val p = params ?: return@setOnTouchListener false
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
+                    releaseFocusToBackground()
                     startX = event.rawX
                     startY = event.rawY
                     startW = p.width
@@ -939,27 +1275,39 @@ class FloatingBrowserService : Service() {
                     val deltaY = (event.rawY - startY).toInt()
 
                     val displayMetrics = resources.displayMetrics
-                    val minW = dp(220)
-                    val maxW = (displayMetrics.widthPixels * 0.95f).toInt()
-                    val minH = dp(240)
-                    val maxH = (displayMetrics.heightPixels * 0.90f).toInt()
+                    val minW = dp(200)
+                    val maxW = (displayMetrics.widthPixels * 0.98f).toInt()
+                    val minH = dp(200)
+                    val maxH = (displayMetrics.heightPixels * 0.92f).toInt()
 
                     if (resizeRight) {
                         p.width = (startW + deltaX).coerceIn(minW, maxW)
                     } else if (resizeLeft) {
                         val proposedW = (startW - deltaX).coerceIn(minW, maxW)
-                        val actualDelta = startW - proposedW
-                        p.width = proposedW
-                        p.x = startXPos + actualDelta
+                        val deltaApplied = proposedW - startW
+                        val newX = startXPos - deltaApplied
+                        if (newX >= 0) {
+                            p.width = proposedW
+                            p.x = newX
+                        } else {
+                            p.x = 0
+                            p.width = (startXPos + startW).coerceIn(minW, maxW)
+                        }
                     }
 
                     if (resizeBottom) {
                         p.height = (startH + deltaY).coerceIn(minH, maxH)
                     } else if (resizeTop) {
                         val proposedH = (startH - deltaY).coerceIn(minH, maxH)
-                        val actualDelta = startH - proposedH
-                        p.height = proposedH
-                        p.y = startYPos + actualDelta
+                        val deltaApplied = proposedH - startH
+                        val newY = startYPos - deltaApplied
+                        if (newY >= 0) {
+                            p.height = proposedH
+                            p.y = newY
+                        } else {
+                            p.y = 0
+                            p.height = (startYPos + startH).coerceIn(minH, maxH)
+                        }
                     }
 
                     savedWidth = p.width
@@ -1090,6 +1438,133 @@ class FloatingBrowserService : Service() {
         webView?.evaluateJavascript(js) { res ->
             android.util.Log.d("FloatingBrowser", "triggerSendMessage result: $res")
         }
+    }
+
+    fun insertTextAndSendInWeb(textToInsert: String, autoSend: Boolean = true) {
+        acquireFocusForFloatingWindow()
+        webView?.requestFocus()
+        val escapedText = org.json.JSONObject.quote(textToInsert)
+        val js = """
+            (function() {
+                if (window.__sah_processing_insert) return 'already_processing';
+                window.__sah_processing_insert = true;
+                setTimeout(function() { window.__sah_processing_insert = false; }, 1200);
+
+                var val = $escapedText;
+
+                function findTargetInput() {
+                    // 1. Check for password or 2FA code input (e.g. 2FA verification screen)
+                    var passSelectors = [
+                        'input[type="password"]',
+                        'input[name*="pass"]',
+                        'input[name*="code"]',
+                        'input[name*="2fa"]',
+                        'input[autocomplete*="password"]',
+                        'input.form-control'
+                    ];
+                    for (var p = 0; p < passSelectors.length; p++) {
+                        var el = document.querySelector(passSelectors[p]);
+                        if (el && el.offsetParent !== null && el.type !== 'hidden') {
+                            return el;
+                        }
+                    }
+
+                    // 2. Telegram Web (Web A, Web K) chat message inputs
+                    var chatSelectors = [
+                        '.input-message-input',
+                        '#editable-message-text',
+                        '.chat-input-main div[contenteditable="true"]',
+                        '.chat-input div[contenteditable="true"]',
+                        '.input-message-container div[contenteditable="true"]',
+                        'div[contenteditable="true"]',
+                        'textarea',
+                        '[role="textbox"]',
+                        '.composer div[contenteditable="true"]',
+                        '.input-field-input'
+                    ];
+                    for (var i = 0; i < chatSelectors.length; i++) {
+                        var el = document.querySelector(chatSelectors[i]);
+                        if (el && el.offsetParent !== null) {
+                            return el;
+                        }
+                    }
+
+                    // 3. Active element if already an editable or input
+                    var act = document.activeElement;
+                    if (act && act.tagName !== 'BODY' && (act.tagName === 'INPUT' || act.tagName === 'TEXTAREA' || act.getAttribute('contenteditable') === 'true')) {
+                        return act;
+                    }
+
+                    // 4. Any visible input or textarea
+                    var any = document.querySelector('div[contenteditable="true"], input:not([type="hidden"]), textarea');
+                    if (any && any.offsetParent !== null) {
+                        return any;
+                    }
+                    return null;
+                }
+
+                var target = findTargetInput();
+                if (target) {
+                    // Programmatically activate and focus target without requiring prior manual tap
+                    try { target.focus(); } catch(e) {}
+                    try { target.click(); } catch(e) {}
+                    try { target.focus(); } catch(e) {}
+
+                    // Insert text cleanly ONLY ONCE
+                    var isContentEditable = target.getAttribute('contenteditable') === 'true' || 
+                                           target.classList.contains('input-message-input') || 
+                                           target.id === 'editable-message-text' || 
+                                           target.tagName === 'DIV';
+
+                    if (isContentEditable) {
+                        target.innerText = val;
+                    } else {
+                        target.value = val;
+                    }
+
+                    target.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+                    target.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+
+                    ${if (autoSend) """
+                    setTimeout(function() {
+                        var sendSelectors = [
+                            'button.btn-send',
+                            'button.tgico-send',
+                            'button[title*="Send"]',
+                            'button[aria-label*="Send"]',
+                            'button.send',
+                            '.btn-circle.btn-primary',
+                            '.chat-input-control.send',
+                            '.btn-send-message',
+                            'button[data-testid="send-button"]',
+                            'button[type="submit"]',
+                            '.icon-send'
+                        ];
+                        var sent = false;
+                        for (var s = 0; s < sendSelectors.length; s++) {
+                            var btn = document.querySelector(sendSelectors[s]);
+                            if (btn && btn.offsetParent !== null) {
+                                btn.click(); // Single click only - do NOT dispatch extra MouseEvent!
+                                sent = true;
+                                break;
+                            }
+                        }
+                        if (!sent) {
+                            // Single Enter key press if no button found
+                            var ev = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true });
+                            target.dispatchEvent(ev);
+                            if (target.form) {
+                                target.form.submit();
+                            }
+                        }
+                    }, 350);
+                    """ else ""}
+                    return 'success';
+                }
+                return 'no_target';
+            })();
+        """.trimIndent()
+        webView?.evaluateJavascript(js, null)
     }
 
     fun scrollToLatestMessages() {
@@ -1279,6 +1754,10 @@ class FloatingBrowserService : Service() {
     }
 
     override fun onDestroy() {
+        unregisterNetworkCallback()
+        if (activeInstance == this) {
+            activeInstance = null
+        }
         super.onDestroy()
         isRunning = false
         serviceScope.cancel()

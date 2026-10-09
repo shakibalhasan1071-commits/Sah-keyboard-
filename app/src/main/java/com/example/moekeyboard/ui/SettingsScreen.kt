@@ -5,6 +5,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Login
+import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -137,7 +140,7 @@ fun SettingsScreen(
                                         colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4285F4)),
                                         modifier = Modifier.fillMaxWidth()
                                     ) {
-                                        Icon(Icons.Default.Login, contentDescription = null)
+                                        Icon(Icons.AutoMirrored.Filled.Login, contentDescription = null)
                                         Spacer(modifier = Modifier.width(8.dp))
                                         Text("Google দিয়ে লগইন করুন")
                                     }
@@ -168,7 +171,7 @@ fun SettingsScreen(
                                         colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
                                         modifier = Modifier.fillMaxWidth()
                                     ) {
-                                        Icon(Icons.Default.Logout, contentDescription = null)
+                                        Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null)
                                         Spacer(modifier = Modifier.width(8.dp))
                                         Text("লগআউট করুন")
                                     }
@@ -248,7 +251,7 @@ fun SettingsScreen(
                     )
                     HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                     SettingsSwitchItem(
-                        icon = Icons.Default.VolumeUp,
+                        icon = Icons.AutoMirrored.Filled.VolumeUp,
                         title = "Keypress Sound",
                         subtitle = "Audible click on keypress",
                         checked = soundEnabled,

@@ -36,7 +36,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.Backspace
+import androidx.compose.material.icons.automirrored.filled.KeyboardReturn
+import androidx.compose.material.icons.automirrored.filled.KeyboardTab
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -1961,7 +1965,7 @@ fun KeyboardToolbar(
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    imageVector = Icons.Default.OpenInNew,
+                    imageVector = Icons.AutoMirrored.Filled.OpenInNew,
                     contentDescription = "ফ্লোটিং উইন্ডো (টেলিগ্রাম / বট)",
                     tint = Color(0xFF4DB6AC),
                     modifier = Modifier.size(16.dp)
@@ -2942,10 +2946,10 @@ fun EnterKey(
     val icon = when (imeAction) {
         EditorInfo.IME_ACTION_SEARCH -> Icons.Default.Search
         EditorInfo.IME_ACTION_SEND -> Icons.AutoMirrored.Filled.Send
-        EditorInfo.IME_ACTION_GO -> Icons.Default.ArrowForward
-        EditorInfo.IME_ACTION_NEXT -> Icons.Default.KeyboardTab
+        EditorInfo.IME_ACTION_GO -> Icons.AutoMirrored.Filled.ArrowForward
+        EditorInfo.IME_ACTION_NEXT -> Icons.AutoMirrored.Filled.KeyboardTab
         EditorInfo.IME_ACTION_DONE -> Icons.Default.Check
-        else -> Icons.Default.KeyboardReturn
+        else -> Icons.AutoMirrored.Filled.KeyboardReturn
     }
 
     Box(

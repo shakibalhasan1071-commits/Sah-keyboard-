@@ -15,6 +15,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -141,7 +142,7 @@ fun InKeyboardAiAssistant(
                     BuildConfig::class.java.getField("GEMINI_API_KEY").get(null) as? String ?: ""
                 } catch (_: Exception) { "" }
 
-                if (apiKey.isNotBlank() && !apiKey.contains("Placeholder")) {
+                if (apiKey.isNotBlank() && !apiKey.contains("Placeholder") && apiKey != "DEFAULT_KEY") {
                     val client = OkHttpClient.Builder()
                         .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
                         .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
@@ -162,7 +163,7 @@ fun InKeyboardAiAssistant(
 
                     val body = rootJson.toString().toRequestBody("application/json".toMediaType())
 
-                    val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$apiKey"
+                    val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$apiKey"
                     val request = Request.Builder().url(url).post(body).build()
 
                     val res = withContext(Dispatchers.IO) { client.newCall(request).execute() }
@@ -536,7 +537,7 @@ fun InKeyboardAiAssistant(
                             )
                             Spacer(modifier = Modifier.width(4.dp))
                             Icon(
-                                imageVector = Icons.Default.Send,
+                                imageVector = Icons.AutoMirrored.Filled.Send,
                                 contentDescription = "Send",
                                 tint = neonGreen,
                                 modifier = Modifier.size(14.dp)

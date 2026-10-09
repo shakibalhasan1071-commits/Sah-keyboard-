@@ -22,6 +22,7 @@ import com.example.MainActivity
 import com.example.moekeyboard.data.db.ClipboardItem
 import com.example.moekeyboard.data.db.MoeDatabase
 import com.example.moekeyboard.data.prefs.KeyboardPreferences
+import com.example.moekeyboard.floating.FloatingBrowserService
 import com.example.moekeyboard.tempmail.TempMailManager
 import com.example.moekeyboard.ui.MiniBrowserActivity
 import kotlinx.coroutines.Dispatchers
@@ -189,6 +190,11 @@ class MoeInputMethodService : LifecycleInputMethodService() {
             shiftState.value = ShiftState.OFF
         }
         isClipboardPanelOpenState.value = false
+
+        // Automatically yield floating window focus when user begins input in another Android app
+        if (info?.packageName != null && info.packageName != packageName) {
+            FloatingBrowserService.onExternalAppInputStarted()
+        }
 
         // Check clipboard safely when input view opens
         checkAndRecordClipboard(info, isDirectClipEvent = false)
